@@ -26,6 +26,12 @@ export async function testMergeFailure({mode,context,worker,base,top,cdn,nextQue
   const folderName = '結合エラーのテスト';
   const url = cdn + '/' + mode + '/1080p/video.m3u8';
   const index = await context.newPage();
+  const dialogs = [];
+  const onDialog = async dialog => {
+    dialogs.push(dialog.type());
+    await dialog.dismiss();
+  };
+  if (automatic) context.on('dialog',onDialog);
   let source, queue, tabId;
   try {
     await index.goto(base+'/manager.html');
@@ -57,7 +63,6 @@ export async function testMergeFailure({mode,context,worker,base,top,cdn,nextQue
     assert.equal(state.phase,'mergeFailed',state.text);
     assert.match(state.text,/再生時刻/);
     assert.match(state.omittedRanges.join(' '),/2\/3 区間目/);
-    await index.locator('[data-filter="stopped"]').click();
     await row.locator('.phase[data-group="stopped"]').waitFor();
     assert.match(await row.innerText(),/結合に失敗しました/);
     assert.equal(await row.getByRole('button',{name:/保存|再取得/}).count(),0);
@@ -95,9 +100,11 @@ export async function testMergeFailure({mode,context,worker,base,top,cdn,nextQue
         try { return (await (await dest.getFileHandle('after-merge-failure.mp4')).getFile()).size > 0; }
         catch (e) { if (e.name !== 'NotFoundError') throw e; return false; }
       },folderName),'next automatic save to finish');
+      assert.deepEqual(dialogs,[],'an individual merge failure must not prompt before the next save');
     }
     console.log(mode,'ended once, kept the destination intact and released its temporary files and save slot');
   } finally {
+    if (automatic) context.off('dialog',onDialog);
     if (queue && !queue.isClosed()) await queue.close();
     if (source) await source.close();
     await index.close();
