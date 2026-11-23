@@ -1,4 +1,4 @@
-import { pagePrefix, readEntry, statusPrefix } from './queue.mjs';
+import { managerClosed, pagePrefix, readEntry, statusPrefix } from './queue.mjs';
 
 const directory = 'download-queue-v1';
 const validRun = id => /^[a-f\d-]{36}$/.test(id);
@@ -52,6 +52,17 @@ export async function dropFiles(run) {
     const queue = await root.getDirectoryHandle(directory);
     await queue.removeEntry(run, { recursive: true });
   } catch (error) { if (error.name !== 'NotFoundError') throw error; }
+}
+
+// A retry can claim the same run while the closed document releases its file handles.
+// Never wait for the file lock while holding a queue lock.
+export async function releaseManager(tabId, retainedId) {
+  const interrupted = await managerClosed(tabId, retainedId);
+  if (!interrupted?.length) return;
+  await Promise.all(interrupted.map(({id,run}) => navigator.locks.request(runLock(run), async () => {
+    const {page,state} = await readEntry(id);
+    if (page?.run !== run || !needsFiles(state)) await dropFiles(run);
+  })));
 }
 
 export async function cleanQueueFiles() {

@@ -3,12 +3,13 @@ import assert from 'node:assert/strict';
 import { serveArchive637, testAutoGap637 } from './automatic-gaps.mjs';
 import { testMergeFailure, testMissingAudio } from './merge-failure.mjs';
 import { testModuleUpdate } from './module-update.mjs';
+import { testDetectionNavigation, testQueueDeparture, testReadyQueueNavigation } from './navigation.mjs';
 import { testSavedPlayback } from './mp4-playback.mjs';
 import { testUpdateRetry } from './update-retry.mjs';
 import { testRetryRecovery } from './retry-recovery.mjs';
 import { gapPreferenceKey } from '../../extension/queue.mjs';
 import { holdTestExports, testSaveLimit } from './save-limit.mjs';
-import { seedFolderSetting, testFolderPresets } from './folder-presets.mjs';
+import { seedFolderSetting, testFolderPresets, testLostFolderReply } from './folder-presets.mjs';
 import { testCleanupRetry, testQueuedRecovery, testSlowPanel } from './save-recovery.mjs';
 import { testDirectInline, testDirectPermission, testListCapture, testListFiles, testListFilters, testListLive, testListOwner, testProgressUpdates } from './list-actions.mjs';
 import { createServer } from 'node:http';
@@ -452,11 +453,16 @@ try {
     function assertClick() { if (!navigator.userActivation.isActive) throw Error('Missing save click'); }
   });
   const downloadCount = () => worker.evaluate(async () => (await chrome.downloads.search({})).length);
-  const cases = process.env.HLS_TEST_CASES?.split(',') || ['playback','moduleupdate','updateretry','retryengine','retrychoice','retrysavehandoff','retryadmission','retrycancelsave','listprogress','listfilters','directinline','directpermission','slowpanel','cleanupretry','queuerecovery','fragmentcheck','segment403','gapauto637','missingtrack','shortsound',...qualityModes,...damagedModes,'listlive','listfiles','listowner','listnative','listcapture','savelimit','wildcard','exact','private','framed','framedlegacy','parallel','latefolder','repeatname','nativefilename','observedfilename','cancelpicker','singlelive','partialicon','framedoff','topplayer','livestopinline','off','denied','frameddenied','ownerclosed','manual','live','publicframed', ...midTransfer,'preset','fileintegrity','nativefirst','folderpresets'];
+  const cases = process.env.HLS_TEST_CASES?.split(',') || ['playback','moduleupdate','updateretry','retryengine','retrychoice','retrysavehandoff','retryadmission','retrycancelsave','listprogress','listfilters','directinline','directpermission','slowpanel','cleanupretry','queuerecovery','fragmentcheck','segment403','gapauto637','missingtrack','shortsound',...qualityModes,...damagedModes,'listlive','listfiles','listowner','listnative','listcapture','savelimit','wildcard','exact','private','framed','framedlegacy','parallel','latefolder','repeatname','nativefilename','observedfilename','cancelpicker','singlelive','partialicon','framedoff','topplayer','livestopinline','off','denied','frameddenied','ownerclosed','manual','live','publicframed', ...midTransfer,'preset','fileintegrity','nativefirst','folderpresets',
+    'detectroute','queueleave','queueclose','queuereload','readyroute','folderreply'];
   for (const mode of cases) {
     if (mode === 'playback') { await testSavedPlayback(context,base); continue; }
     if (mode === 'moduleupdate') { await testModuleUpdate({context,base,cdn,project,extension}); continue; }
     await worker.evaluate(seedFolderSetting);
+    if (mode === 'folderreply') { await testLostFolderReply({context,base}); continue; }
+    if (mode === 'readyroute') {
+      await testReadyQueueNavigation({context,base,top,worker,nextQueue,until,lastNative,bytes:Buffer.concat([source.video.init,source.video.media])}); continue;
+    }
     if (['retryengine','retrychoice','retrysavehandoff','retryadmission','retrycancelsave'].includes(mode)) {
       await worker.evaluate(seedFolderSetting,{name:'再取得検証'});
       await testRetryRecovery({mode,context,base,top,cdn,extension,worker,requests,releases,until});
@@ -508,6 +514,14 @@ try {
     }
     rejectPlaylist = false;
     await worker.evaluate(enabled => chrome.storage.local.set({ streamDetection: enabled }), !['off','framedoff'].includes(mode));
+    if (mode === 'detectroute') {
+      await testDetectionNavigation({context,base,top,cdn,worker,until}); continue;
+    }
+    if (['queueleave','queueclose','queuereload'].includes(mode)) {
+      let release;
+      releases.set('list-held',new Promise(resolve => {release=resolve;}));
+      await testQueueDeparture({mode,context,base,top,worker,nextQueue,until,release}); continue;
+    }
     if (mode === 'framedlegacy') await worker.evaluate(site => chrome.storage.local.set({ ['hls-work-tab:' + site]:true }), top);
     if (mode === 'savelimit') {
       await testSaveLimit({context,base,top,cdn,nextQueue,startFromToolbar,expectTabIcon,until,bytes:Buffer.concat([source.video.init,source.video.media])}); continue;

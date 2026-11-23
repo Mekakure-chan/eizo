@@ -40,6 +40,13 @@ const lock = (id, work) => navigator.locks.request('embedded-video-queue/' + id,
 const urlFor = id => chrome.runtime.getURL('manager.html') + (id ? '?q=' + id : '');
 const opening = new Map();
 
+function registerOwner(page, tabId) {
+  const key = 'download-owner:' + tabId;
+  return lock(key, () => chrome.storage.session.set({
+    [pagePrefix + page.id]:{...page,owner:tabId}, [key]:page.id
+  }));
+}
+
 export function managerSender(sender) {
   return !!sender.tab && sender.frameId === 0 && sender.url?.split('?')[0] === urlFor() &&
     sender.tab.incognito === !!chrome.extension.inIncognitoContext;
@@ -256,10 +263,14 @@ export async function handleQueueRequest(msg, sender, engine) {
     if (page && page.incognito !== incognito) return false;
     if (msg.op === 'queue-close-source') return !!page && page.run === msg.run && state?.run === msg.run &&
       managerSender(sender) && closeSource(page,state,sender);
-    if (msg.op === 'queue-find' && state?.phase !== 'reader' && !keepsPlace(state?.phase)) return false;
     if (msg.op === 'queue-open' && !page) return false;
     if (['queue-open','queue-find','queue-add','queue-claim'].includes(msg.op)) {
-      state = await recoverBackground(page, state, engine, msg.op === 'queue-open') || state;
+      const recovered = await recoverBackground(page, state, engine, msg.op === 'queue-open');
+      state = recovered || state;
+      if (msg.op === 'queue-find' && state?.phase !== 'reader' && !keepsPlace(state?.phase)) {
+        if (recovered) engine.present(page,state);
+        return false;
+      }
     }
     if (msg.op === 'queue-close-saved') {
       if (!sender.tab || sender.url !== urlFor(id) || page?.owner !== sender.tab.id ||
@@ -271,8 +282,7 @@ export async function handleQueueRequest(msg, sender, engine) {
       if (!page || !sender.tab || sender.url !== urlFor(id)) return false;
       const prior = await existingTab(urlFor(id), incognito, page.owner);
       if (prior && prior.id !== sender.tab.id) return false;
-      if (page.owner !== sender.tab.id) await chrome.storage.session.set({ [pagePrefix + id]: { ...page, owner: sender.tab.id },
-        ['download-owner:' + sender.tab.id]: id });
+      if (page.owner !== sender.tab.id) await registerOwner(page,sender.tab.id);
       return true;
     }
     // A repeated click opens the existing queue, including a choice left by an older version.
@@ -310,17 +320,16 @@ export async function handleQueueRequest(msg, sender, engine) {
       return true;
     }
     const tab = await showTab(urlFor(id), incognito, windowId, page.owner);
-    if (tab.id !== page.owner) await chrome.storage.session.set({ [pagePrefix + id]: { ...page, owner: tab.id },
-      ['download-owner:' + tab.id]: id });
+    if (tab.id !== page.owner) await registerOwner(page,tab.id);
     return true;
   });
 }
 
-export async function managerClosed(tabId) {
-  await recoverListWork(tabId);
+export async function managerClosed(tabId, retainedId) {
+  const interrupted = await recoverListWork(tabId);
   const ownerKey = 'download-owner:' + tabId;
   const id = (await chrome.storage.session.get(ownerKey))[ownerKey];
-  if (!id) return;
+  if (!id || id === retainedId) return interrupted;
   await lock(id, async () => {
     const current = await readEntry(id);
     if (current.page?.owner === tabId) {
@@ -328,16 +337,21 @@ export async function managerClosed(tabId) {
       const state = current.page.runner === 'engine' || current.state?.workerTab != null ? null : detachedState(current.state);
       if (state) patch[statusPrefix + id] = state;
       await chrome.storage.session.set(patch);
+      if (state?.phase === 'interrupted') interrupted.push({id,run:state.run});
     }
-    await chrome.storage.session.remove(ownerKey);
+    await lock(ownerKey, async () => {
+      if ((await chrome.storage.session.get(ownerKey))[ownerKey] === id) await chrome.storage.session.remove(ownerKey);
+    });
   });
+  return interrupted;
 }
 
 export const listWorkerKey = tabId => 'download-list-worker:' + tabId;
 
 export async function recoverListWork(tabId) {
+  const interrupted = [];
   const key = listWorkerKey(tabId);
-  if (!(await chrome.storage.session.get(key))[key]) return;
+  if (!(await chrome.storage.session.get(key))[key]) return interrupted;
   const jobs = await allEntries(!!chrome.extension.inIncognitoContext);
   for (const {page,state} of jobs) {
     if (state?.workerTab !== tabId) continue;
@@ -346,9 +360,11 @@ export async function recoverListWork(tabId) {
       if (fresh.page?.run !== page.run || fresh.state?.workerTab !== tabId) return;
       const next = detachedState(fresh.state);
       if (next) await chrome.storage.session.set({[statusPrefix + page.id]:next});
+      if (next?.phase === 'interrupted') interrupted.push({id:page.id,run:page.run});
     });
   }
   await chrome.storage.session.remove(key);
+  return interrupted;
 }
 
 export function detachedState(state) {
@@ -358,6 +374,11 @@ export function detachedState(state) {
   if (['queued', 'fetching', 'reader', 'method', 'recording'].includes(state.phase)) return { run: state.run, phase: 'interrupted',
     text: '取得に使用していた画面が閉じられました。「再取得」で最初から取得できます。', progress: null };
   return null;
+}
+
+export function recoverManagerState(id, run, tabId, phase) {
+  return changeState(id,run,(page,state) => page.owner === tabId && page.runner !== 'engine' &&
+    state?.run === run && state.phase === phase && state.workerTab == null && !state.backgroundSave && detachedState(state));
 }
 
 export async function sendQueue(op, options = {}) {

@@ -5,9 +5,9 @@ import { acquireRun } from './acquire-run.mjs';
 import { openSourceChoices } from './jobs.mjs';
 import { createFolderControls } from './manager-folders.mjs';
 import { createQueueList, queueGroup } from './manager-list.mjs';
-import { allEntries, detachedState, gapPreferenceKey, listWorkerKey, managerSender, needsSourceTab, omissionText, pagePrefix, phaseLabel, readEntry, readGapPreference, recoverListWork, sendQueue, sourceTabHint, statusPrefix, writeState } from './queue.mjs';
+import { allEntries, detachedState, gapPreferenceKey, listWorkerKey, managerSender, needsSourceTab, omissionText, pagePrefix, phaseLabel, readEntry, readGapPreference, recoverManagerState, sendQueue, sourceTabHint, statusPrefix, writeState } from './queue.mjs';
 import { exportMedia, exportName, finishMergeFailure, sizeLabel } from './queue-transfer.mjs';
-import { cleanQueueFiles, dropFiles, runLock } from './queue-files.mjs';
+import { cleanQueueFiles, dropFiles, releaseManager, runLock } from './queue-files.mjs';
 import { recordFormats } from './recording.mjs';
 import { acquireSaveSlot, commitStatus, saveProgress, saveWaitText, storageSaveText } from './save-folder.mjs';
 
@@ -204,9 +204,14 @@ async function refresh(currentChanged = true, changedRows = null) {
   const nativeGranted = state.phase === 'permission' && current.job.kind === 'whole' &&
     state.permission?.permissions?.includes('nativeMessaging') && await chrome.permissions.contains(state.permission);
   if (state.phase === 'queued' || nativeGranted) { void acquire().catch(notice); return; }
-  const interrupted = detachedState(state);
-  if (interrupted) await navigator.locks.request(runLock(current.run), { ifAvailable: true }, lock =>
-      lock && writeState(id, selected.page.run, interrupted));
+  if (detachedState(state)) {
+    const {run,phase} = state;
+    await navigator.locks.request(runLock(run), {ifAvailable:true}, async lock => {
+      if (!lock) return;
+      const next = await recoverManagerState(id,run,tab.id,phase);
+      if (next?.phase === 'interrupted') await dropFiles(run);
+    });
+  }
 }
 
 async function acquire() {
@@ -466,7 +471,7 @@ addEventListener('pagehide', () => {
 });
 try { gapSetting.checked = await readGapPreference(tab.incognito); gapSetting.disabled = false; }
 catch (error) { notice(error); }
-await recoverListWork(tab.id).catch(notice);
+await releaseManager(tab.id,id).catch(notice);
 void cleanQueueFiles().catch(() => {});
 await refreshFolder().catch(notice);
 for (const entry of await allEntries(tab.incognito)) entries.set(entry.page.id, entry);

@@ -1,8 +1,8 @@
 import { inlineEngine, registerEngine } from './engine-host.mjs';
 import { allSites, detectionSetting, playlistResponse, rememberStream, tabKey } from './discovery.mjs';
 import { cleanClosedStages } from './staging.mjs';
-import { handleQueueRequest, managerClosed } from './queue.mjs';
-import { cleanQueueFiles } from './queue-files.mjs';
+import { handleQueueRequest } from './queue.mjs';
+import { cleanQueueFiles, releaseManager } from './queue-files.mjs';
 
 registerEngine();
 const manifest = chrome.runtime.getManifest();
@@ -11,9 +11,14 @@ let enabled = chrome.storage.local.get(detectionSetting).then(value => !!value[d
 function changeTab(tabId, update) {
   const previous = queues.get(tabId) || Promise.resolve();
   const task = previous.then(async () => {
-    const key = tabKey(tabId);
-    const items = (await chrome.storage.session.get(key))[key] || [];
-    const next = await update(items);
+    const key = tabKey(tabId), historyKey = key + '-history';
+    const stored = await chrome.storage.session.get([key,historyKey]);
+    const items = stored[key] || [], history = {frames:stored[historyKey]};
+    const next = await update(items,history);
+    if (history.frames !== stored[historyKey]) {
+      if (history.frames) await chrome.storage.session.set({[historyKey]:history.frames});
+      else await chrome.storage.session.remove(historyKey);
+    }
     if (next === items) return;
     if (next.length) await chrome.storage.session.set({ [key]: next });
     else await chrome.storage.session.remove(key);
@@ -33,15 +38,28 @@ function changeTab(tabId, update) {
 }
 
 chrome.action.setBadgeBackgroundColor({ color: '#ad302b' });
+// Compare SPA locations across worker restarts without keeping the browsing URLs.
+async function routeKey(url) {
+  const bytes = await crypto.subtle.digest('SHA-256',new TextEncoder().encode(url));
+  return Array.from(new Uint8Array(bytes), n => n.toString(16).padStart(2,'0')).join('');
+}
+
 function observeResponse(details) {
   const item = playlistResponse(details);
   if (!item) return;
   changeTab(details.tabId, async items => {
     if (!await enabled) return items;
-    const doc = await chrome.webNavigation.getFrame({ tabId: details.tabId, frameId: item.frameId });
+    const frames = await chrome.webNavigation.getAllFrames({tabId:details.tabId});
+    const byId = new Map(frames?.map(frame => [frame.frameId,frame]));
+    const doc = byId.get(item.frameId);
     if (!doc || (item.documentId && doc.documentId !== item.documentId)) return items;
     if (item.pageOrigin && new URL(doc.url).origin !== item.pageOrigin) delete item.pageOrigin;
-    return rememberStream(items, { ...item, documentId: doc.documentId });
+    const parents = [];
+    for (let frame = doc; frame; frame = byId.get(frame.parentFrameId)) parents.push(frame);
+    const route = await Promise.all(parents.map(async frame => ({
+      frameId:frame.frameId, documentId:frame.documentId, key:await routeKey(frame.url)
+    })));
+    return rememberStream(items, { ...item, documentId: doc.documentId, route });
   });
 }
 function listen(value) {
@@ -57,22 +75,52 @@ initialSetting.then(value => { if (enabled === initialSetting && !value) listen(
 
 chrome.webNavigation.onCommitted.addListener(event => {
   if (event.frameId === 0) {
-    if (!event.url.startsWith(chrome.runtime.getURL('manager.html'))) void managerClosed(event.tabId).catch(() => {});
+    if (event.url.split(/[?#]/,1)[0] !== chrome.runtime.getURL('manager.html')) void releaseManager(event.tabId).catch(() => {});
   }
-  changeTab(event.tabId, items => {
-    const next = items.filter(s => (event.frameId !== 0 && s.frameId !== event.frameId) || s.documentId === event.documentId);
+  changeTab(event.tabId, (items,history) => {
+    if (event.frameId === 0) history.frames = undefined;
+    else if (history.frames?.[event.frameId]) {
+      history.frames = {...history.frames};
+      delete history.frames[event.frameId];
+    }
+    const next = items.filter(s => {
+      const previous = s.route?.find(frame => frame.frameId === event.frameId);
+      if (previous) return previous.documentId === event.documentId;
+      return (event.frameId !== 0 && s.frameId !== event.frameId) || s.documentId === event.documentId;
+    });
     return next.length === items.length ? items : next;
   });
 });
-chrome.webNavigation.onHistoryStateUpdated.addListener(event => {
-  changeTab(event.tabId, items => !items.length ? items : event.frameId === 0 ? [] : items.filter(s => s.frameId !== event.frameId));
-});
+function routeChanged(event) {
+  changeTab(event.tabId, async (items,history) => {
+    const last = history.frames?.[event.frameId];
+    if (!items.length && !last) return items;
+    const key = await routeKey(event.url);
+    const next = items.filter(item => {
+      const previous = item.route?.find(frame => frame.frameId === event.frameId);
+      if (previous) return previous.documentId !== event.documentId || previous.key === key;
+      return event.frameId !== 0 && item.frameId !== event.frameId;
+    });
+    if (next.length !== items.length || (last && last.documentId === event.documentId && last.key !== key)) {
+      history.frames = {...(event.frameId ? history.frames : {}), [event.frameId]:{
+        documentId:event.documentId, key, since:event.timeStamp
+      }};
+    }
+    return next.length === items.length ? items : next;
+  });
+}
+chrome.webNavigation.onHistoryStateUpdated.addListener(routeChanged);
+chrome.webNavigation.onReferenceFragmentUpdated.addListener(routeChanged);
+function clearTab(tabId) {
+  return changeTab(tabId, (_items,history) => { history.frames = undefined; return []; });
+}
 chrome.tabs.onRemoved.addListener(tabId => {
-  changeTab(tabId, () => []);
-  void managerClosed(tabId).catch(() => {});
+  clearTab(tabId);
+  void releaseManager(tabId).catch(() => {});
 });
 chrome.tabs.onReplaced.addListener((_, removed) => {
-  changeTab(removed, () => []);
+  clearTab(removed);
+  void releaseManager(removed).catch(() => {});
 });
 chrome.runtime.onStartup.addListener(() => { void cleanClosedStages().catch(() => {}); });
 chrome.runtime.onStartup.addListener(() => { void cleanQueueFiles().catch(() => {}); });
@@ -87,8 +135,8 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
 
 async function clearDetections() {
   const data = await chrome.storage.session.get(null);
-  const ids = Object.keys(data).filter(key => /^detected-streams-\d+$/.test(key));
-  await Promise.all(ids.map(key => changeTab(Number(key.slice('detected-streams-'.length)), () => [])));
+  const ids = new Set(Object.keys(data).map(key => /^detected-streams-(\d+)(?:-history)?$/.exec(key)?.[1]).filter(Boolean));
+  await Promise.all([...ids].map(id => clearTab(Number(id))));
 }
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local' || !changes[detectionSetting]) return;
@@ -110,7 +158,9 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
     if (!await enabled) return [];
     await queues.get(msg.tabId);
     const key = tabKey(msg.tabId);
-    return (await chrome.storage.session.get(key))[key] || [];
+    const stored = await chrome.storage.session.get([key,key+'-history']);
+    const items = (stored[key] || []).map(({route, ...candidate}) => candidate);
+    return msg.withHistory ? {items, frames:stored[key+'-history']} : items;
   })().then(respond, () => respond([]));
   return true;
 });

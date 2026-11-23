@@ -6,9 +6,20 @@ const $ = id => document.getElementById(id);
 export function createFolderControls(scope, {onRefresh, saveWaiting, notice}) {
   const extensionName = chrome.runtime.getManifest().name;
   const channel = new BroadcastChannel('embedded-video-save-folder-' + scope);
-  let active, version = 0;
+  let active, version = 0, latestChange = 0;
+
+  async function changeRecorded(action, fields) {
+    const settings = await getFolderSettings(scope);
+    if (action === 'select') return settings.activeId === fields.id;
+    if (action === 'remove') return !settings.slots.some(entry => entry?.id === fields.id);
+    for (const entry of settings.slots) {
+      if (entry && await fields.handle.isSameEntry(entry.handle)) return true;
+    }
+    return false;
+  }
 
   async function apply(action, fields) {
+    const change = ++latestChange;
     // The worker owns the commit even if the list closes immediately after this click.
     const worker = navigator.serviceWorker.controller || (await navigator.serviceWorker.ready).active;
     const {port1, port2} = new MessageChannel();
@@ -19,14 +30,23 @@ export function createFolderControls(scope, {onRefresh, saveWaiting, notice}) {
         timer = setTimeout(() => reject(new Error('保存先の設定に応答がありません。取得・保存が終わったら、Chromeの拡張機能画面で「' + extensionName + '」を再読み込みし、一覧を開き直してください。')), 10000);
         port1.onmessage = ({data}) => {
           clearTimeout(timer);
-          if (data.received) return;
+          if (data.received) {
+            // An update can stop the worker after it receives the message. Check the
+            // committed settings once, without repeating a user's selection.
+            timer = setTimeout(() => resolve({checkSettings:true}), 30000);
+            return;
+          }
           if (data.error) reject(new Error(data.error)); else resolve(data);
         };
         port1.onmessageerror = () => reject(new Error('保存先の変更結果を読み取れませんでした。'));
       });
       worker.postMessage({op:'update-save-folders', action, ...fields}, [port2]);
       const result = await reply;
-      $('folder-feedback').textContent = action === 'register' && !result.changed ? 'このフォルダーは登録済みです。' : '';
+      let feedback = '';
+      if (result.checkSettings && !await changeRecorded(action,fields)) {
+        feedback = '保存先の変更を確認できませんでした。現在の登録内容を表示しています。';
+      } else if (action === 'register' && result.changed === false) feedback = 'このフォルダーは登録済みです。';
+      if (change === latestChange) $('folder-feedback').textContent = feedback;
       await refresh();
     } finally { clearTimeout(timer); port1.close(); }
   }

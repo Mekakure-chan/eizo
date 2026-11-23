@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { detachedState, handleQueueRequest, keepsPlace, pageId, readEntry, writeState } from '../extension/queue.mjs';
+import { detachedState, handleQueueRequest, keepsPlace, pageId, readEntry, recoverManagerState, writeState } from '../extension/queue.mjs';
 import { mp4StatusText } from '../extension/mp4-merge-error.mjs';
 
 test('an earlier module mismatch shows the available recovery action without changing the job', () => {
@@ -36,6 +36,58 @@ test('opening a page again preserves running work and the unsaved file', () => {
   assert.equal(detachedState({ ...ready, phase: 'saving' }).phase, 'ready');
   assert.equal(detachedState({ ...ready, phase: 'fetching' }).phase, 'interrupted');
   assert.equal(detachedState({ ...ready, phase: 'method' }).phase, 'interrupted');
+});
+
+test('one toolbar click can restart a background download found to have stopped', async () => {
+  const sourceUrl = 'https://example.test/restart', id = await pageId(sourceUrl);
+  const run = crypto.randomUUID(), page = {id,run,sourceUrl,incognito:false,runner:'engine'};
+  const data = {['download-page:'+id]:page,['download-state:'+id]:{run,phase:'fetching'}};
+  globalThis.chrome = {storage:{session:{
+    get:async keys => Object.fromEntries(keys.map(key => [key,data[key]])),
+    set:async patch => Object.assign(data,patch)
+  }}};
+  try {
+    const presented = [];
+    const handled = await handleQueueRequest({op:'queue-find',sourceUrl},{},{
+      recover:async () => ({run,phase:'interrupted'}),
+      present:(_page,state) => presented.push(state.phase)
+    });
+    assert.equal((await readEntry(id)).state.phase,'interrupted');
+    assert.equal(handled,false,'the popup must continue detecting a fresh candidate on the same click');
+    assert.deepEqual(presented,['interrupted'],'the source tab must stop displaying the previous download as active');
+  } finally { delete globalThis.chrome; }
+});
+
+test('a returning queue tab cannot interrupt a job claimed elsewhere or a completed save', async () => {
+  const id = await pageId('https://example.test/queue-owner'), run = crypto.randomUUID();
+  const page = {id,run,owner:4,runner:'tab'}, state = {run,phase:'saving',output:{bytes:128}};
+  const pk = 'download-page:'+id, sk = 'download-state:'+id, data = {};
+  globalThis.chrome = {storage:{session:{
+    get:async keys => Object.fromEntries(keys.map(key => [key,data[key]])),
+    set:async patch => Object.assign(data,patch)
+  }}};
+  try {
+    for (const [owner,active] of [
+      [{...page,owner:5},state],[{...page,runner:'engine'},state],[page,{...state,phase:'saved'}],
+      [page,{...state,workerTab:6}],[page,{...state,backgroundSave:true}]
+    ]) {
+      data[pk] = owner; data[sk] = active;
+      assert.equal(await recoverManagerState(id,run,4,'saving'),false);
+      assert.deepEqual(data[sk],active);
+    }
+    data[pk] = page; data[sk] = state;
+    assert.equal((await recoverManagerState(id,run,4,'saving')).phase,'ready');
+    assert.deepEqual(data[sk].output,state.output);
+  } finally { delete globalThis.chrome; }
+});
+
+test('an already-open manager can still use the original cleanup exports during an update', async () => {
+  const {managerClosed, recoverListWork} = await import('../extension/queue.mjs');
+  globalThis.chrome = {storage:{session:{get:async () => ({})}}};
+  try {
+    await recoverListWork(5);
+    await managerClosed(5);
+  } finally { delete globalThis.chrome; }
 });
 
 test('racing new downloads create one manager even before Chrome exposes its URL, and stale writers cannot overwrite a new attempt', async () => {

@@ -20,6 +20,42 @@ export async function seedFolderSetting({scope = 'normal', name = null} = {}) {
   } finally { db.close(); }
 }
 
+export async function testLostFolderReply({context,base}) {
+  const list = await context.newPage();
+  try {
+    await list.goto(base+'/manager.html');
+    await list.locator('#folder-name').filter({hasText:'毎回選択'}).waitFor();
+    await list.evaluate(() => {
+      const send = ServiceWorker.prototype.postMessage, timer = window.setTimeout.bind(window);
+      window.setTimeout = (callback,ms,...args) => timer(callback,[10000,30000].includes(ms) ? 250 : ms,...args);
+      ServiceWorker.prototype.postMessage = function(message,ports) {
+        if (message.op !== 'update-save-folders') return send.call(this,message,ports);
+        const target = ports[0];
+        target.postMessage({received:true});
+        if (sessionStorage.getItem('fixture-lost-reply') === 'after-commit') {
+          const downstream = new MessageChannel();
+          downstream.port1.onmessage = ({data}) => { if (!data.received) downstream.port1.close(); };
+          send.call(this,message,[downstream.port2]);
+        }
+        target.close();
+      };
+      sessionStorage.setItem('fixture-folder','応答中断テスト');
+    });
+    await list.locator('#choose-folder').click();
+    await list.locator('#folder-feedback').filter({hasText:'保存先の変更'}).waitFor({timeout:4000});
+    assert.equal(await list.locator('#folder-presets button:visible').count(),0);
+    await list.evaluate(() => {
+      sessionStorage.setItem('fixture-lost-reply','after-commit');
+      document.querySelector('#folder-feedback').textContent = '以前の操作結果';
+    });
+    await list.locator('#choose-folder').click();
+    await list.locator('#folder-name').filter({hasText:'応答中断テスト'}).waitFor();
+    await list.waitForFunction(() => !document.querySelector('#folder-feedback').textContent,null,{timeout:4000});
+    assert.equal(await list.locator('#folder-presets button:visible').count(),1);
+    console.log('the folder UI recovered from a lost acknowledgment result before and after the real commit');
+  } finally { await list.close(); }
+}
+
 export async function testFolderPresets({context, base, top, worker, bytes, screenshots}) {
   await worker.evaluate(seedFolderSetting, {name:'旧保存先'});
   await worker.evaluate(seedFolderSetting, {scope:'private', name:'別の閲覧枠'});

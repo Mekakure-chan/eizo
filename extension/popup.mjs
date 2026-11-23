@@ -129,8 +129,23 @@ async function inspect(autoOpen) {
     candidate.label = frame.frameId === 0 && tab.title ? tab.title : candidate.host + ' · ' + candidate.id;
     whole.set(key, candidate);
   }
+  const snapshot = await chrome.runtime.sendMessage({op:'detected',tabId:tab.id,withHistory:true});
+  const detected = Array.isArray(snapshot) ? snapshot : snapshot?.items || [];
+  const since = new Map();
+  if (snapshot?.frames) {
+    const byId = new Map(frames.map(frame => [frame.frameId,frame]));
+    for (const {frame,result} of reports) {
+      let cutoff = 0;
+      for (let doc = frame; doc; doc = byId.get(doc.parentFrameId)) {
+        const changed = snapshot.frames[doc.frameId];
+        if (changed?.documentId === doc.documentId) cutoff = Math.max(cutoff,changed.since);
+      }
+      if (!cutoff) continue;
+      since.set(frame.documentId,cutoff);
+      if (result?.items) result.items = result.items.filter(item => item.source !== 'resource' || item.seenAt >= cutoff);
+    }
+  }
   const items = reports.flatMap(report => report.result?.items || []);
-  const detected = await chrome.runtime.sendMessage({ op: 'detected', tabId: tab.id });
   const current = new Set(docs.filter(doc => !protectedDocs.has(doc.documentId)).map(doc => doc.documentId));
   const known = new Set();
   const pageSources = new Map();
@@ -156,7 +171,8 @@ async function inspect(autoOpen) {
           (/\.m3u8$/i.test(new URL(url).pathname) || /mpegurl/i.test(item.type))) noteSource(url, frame);
     }
   }
-  for (const item of [...(detected || []), ...observedDuringRecovery]) {
+  const recovered = observedDuringRecovery.filter(item => !(item.seenAt < since.get(item.documentId)));
+  for (const item of [...detected, ...recovered]) {
     if (!current.has(item.documentId)) continue;
     known.add(item.url);
     noteTime(item.url, item.seenAt);
