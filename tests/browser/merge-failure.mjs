@@ -1,20 +1,20 @@
 import assert from 'node:assert/strict';
 import {seedFolderSetting} from './folder-presets.mjs';
 
-export async function testMissingAudio({context,base,cdn,nextQueue}) {
+export async function testMissingAudio({mode,context,base,cdn,nextQueue}) {
   const index = await context.newPage();
   let queue;
   try {
     await index.goto(base+'/manager.html');
     const next = nextQueue();
     await index.evaluate(async job => (await import('./jobs.mjs')).openTransfer(job),
-      {kind:'hls',label:'missingtrack',url:cdn+'/missingtrack/playlist.m3u8'});
+      {kind:'hls',label:mode,url:cdn+'/'+mode+'/playlist.m3u8'});
     queue = await next;
     await queue.locator('#phase:is([data-state="failed"],[data-state="mergeFailed"])').waitFor();
     assert.equal(await queue.locator('#phase').innerText(),'結合に失敗しました');
-    assert.match(await queue.locator('#status').innerText(),/音声トラック/);
+    assert.match(await queue.locator('#status').innerText(),mode === 'shortsound' ? /音声の長さが足りません/ : /音声トラック/);
     assert.ok(await queue.locator('#retry').isHidden());
-    console.log('missing audio track ended at the merge check before offering to save');
+    console.log(mode,'stopped before saving and showed a terminal audio error');
   } finally {
     if (queue && !queue.isClosed()) await queue.close();
     await index.close();

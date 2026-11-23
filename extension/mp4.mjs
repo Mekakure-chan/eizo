@@ -1,5 +1,5 @@
 import { writeMediaBlocks } from './media.mjs';
-import { checkTrackDuration } from './mp4-duration.mjs';
+import { TrackTime } from './mp4-track-time.mjs';
 import { Mp4MergeError } from './mp4-merge-error.mjs';
 
 // Keep the public names used by already shipped queues.
@@ -46,12 +46,9 @@ function tsTimeline(muxer) {
         offset = Math.max(...rewinds);
       }
       for (const [kind, {start, end}] of timing) {
-        const prior = tracks.get(kind);
-        const writtenEnd = end.dts + offset;
-        tracks.set(kind, {start:start.dts, end:writtenEnd,
-          first:Math.min(prior?.first ?? Infinity, start.dts + offset),
-          last:Math.max(prior?.last ?? -Infinity, writtenEnd),
-          ticks:(prior?.ticks || 0) + end.dts - start.dts});
+        const time = tracks.get(kind)?.time ?? new TrackTime();
+        time.add((start.dts + offset) / 90000, (end.dts - start.dts) / 90000);
+        tracks.set(kind, {start:start.dts, end:end.dts + offset, time});
       }
       const primary = timing.get('video') || timing.get('audio');
       const start = Math.round(primary.start.pts + offset);
@@ -60,8 +57,7 @@ function tsTimeline(muxer) {
     },
     verify(duration) {
       for (const [kind, track] of tracks) {
-        const seconds = Math.min(track.ticks, track.last - track.first) / 90000;
-        checkTrackDuration(kind === 'video' ? '映像' : '音声', duration, seconds);
+        track.time.verify(kind === 'video' ? '映像' : '音声', duration);
       }
     }
   };
@@ -121,7 +117,7 @@ export async function exportTsAsMp4(file, ends, duration, writer, signal, progre
     const clock = timeline.advance();
     let segmentSize = 0;
     for (const event of events) {
-      if (event.type !== 'combined' || !event.data.length) throw formatError();
+      if (!['combined', 'video', 'audio'].includes(event.type) || !event.data.length) throw formatError();
       const descriptions = probe.findBox(event.initSegment, ['moov', 'trak', 'mdia', 'minf', 'stbl', 'stsd']);
       const tracks = probe.tracks(event.initSegment);
       const signature = tracks.map((track, i) => track.id + '/' + track.codec + '/' + descriptions[i].join(',')).sort().join('|');

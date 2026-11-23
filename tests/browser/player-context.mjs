@@ -83,6 +83,7 @@ for (let pos = 0; source.video.media.toString('ascii', pos + 4, pos + 8) === 'mo
 }
 assert.equal(fragments.length, 3);
 const muxedFixture = await readFile(path.join(project,'tests','fixtures','muxed-fragments.mp4'));
+const shortSound = await readFile(path.join(project,'tests','fixtures','short-muxed-audio.mp4'));
 const padding = Buffer.alloc(16384, 90); padding.writeUInt32BE(padding.length); padding.write('free', 4);
 fragments[1] = Buffer.concat([fragments[1], padding]);
 const midTransfer = new Set(['midclose','remount','sourceclosed','changedpage','spachange','detachedinvalid','publicparts','framechanged','repeatedloss','recovery403','livereconnect']);
@@ -106,7 +107,7 @@ function media(req, res) {
   const ref = req.headers.referer || '';
   const publicSegment = (scenario === 'publicparts' && leaf?.endsWith('.m4s')) || (scenario === 'detachedinvalid' && leaf === '1.m4s');
   const damaged = damagedModes.has(scenario) || ['updategap','retrygap','retrychoice'].includes(scenario);
-  const valid = damaged || qualityModes.has(scenario) || ['manual','updatepair','retrypair','publicframed','savelimit','fragmentcheck','segment403','missingtrack'].includes(scenario) || publicSegment || (pageClient && ref === (scenario === 'private' ? '' : playerOrigin + '/'));
+  const valid = damaged || qualityModes.has(scenario) || ['manual','updatepair','retrypair','publicframed','savelimit','fragmentcheck','segment403','missingtrack','shortsound'].includes(scenario) || publicSegment || (pageClient && ref === (scenario === 'private' ? '' : playerOrigin + '/'));
   const denied = (playerDenial.has(scenario) && rejectPlaylist) || (scenario === 'recovery403' && ended.has(scenario) && leaf === '1.m4s') ||
     (scenario === 'segment403' && leaf === '2.m4s') || (damaged && leaf === '1.m4s') ||
     (scenario === 'gapauto637' && leaf === 'p8.m4s');
@@ -115,6 +116,17 @@ function media(req, res) {
   res.setHeader('Access-Control-Allow-Origin', scenario === 'exact' ? player : '*');
   res.setHeader('Cache-Control', 'no-store');
   if (status !== 200) { res.writeHead(status).end(); return; }
+  if (scenario === 'shortsound') {
+    if (kind === 'playlist.m3u8') {
+      res.writeHead(200,{'Content-Type':'application/vnd.apple.mpegurl'}).end(
+        '#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXT-X-MAP:URI="init.mp4"\n#EXTINF:10,\npart.m4s\n#EXT-X-ENDLIST\n');
+    } else {
+      const initEnd = shortSound.indexOf('moof') - 4;
+      res.writeHead(200,{'Content-Type':'video/mp4'}).end(
+        kind === 'init.mp4' ? shortSound.subarray(0,initEnd) : shortSound.subarray(initEnd));
+    }
+    return;
+  }
   if (scenario === 'detachedinvalid' && !pageClient && leaf === '1.m4s') {
     res.writeHead(200, {'Content-Type':'video/mp4'}).end('incomplete media'); return;
   }
@@ -440,7 +452,7 @@ try {
     function assertClick() { if (!navigator.userActivation.isActive) throw Error('Missing save click'); }
   });
   const downloadCount = () => worker.evaluate(async () => (await chrome.downloads.search({})).length);
-  const cases = process.env.HLS_TEST_CASES?.split(',') || ['playback','moduleupdate','updateretry','retryengine','retrychoice','retrysavehandoff','retryadmission','retrycancelsave','listprogress','listfilters','directinline','directpermission','slowpanel','cleanupretry','queuerecovery','fragmentcheck','segment403','gapauto637','missingtrack',...qualityModes,...damagedModes,'listlive','listfiles','listowner','listnative','listcapture','savelimit','wildcard','exact','private','framed','framedlegacy','parallel','latefolder','repeatname','nativefilename','observedfilename','cancelpicker','singlelive','partialicon','framedoff','topplayer','livestopinline','off','denied','frameddenied','ownerclosed','manual','live','publicframed', ...midTransfer,'preset','fileintegrity','nativefirst','folderpresets'];
+  const cases = process.env.HLS_TEST_CASES?.split(',') || ['playback','moduleupdate','updateretry','retryengine','retrychoice','retrysavehandoff','retryadmission','retrycancelsave','listprogress','listfilters','directinline','directpermission','slowpanel','cleanupretry','queuerecovery','fragmentcheck','segment403','gapauto637','missingtrack','shortsound',...qualityModes,...damagedModes,'listlive','listfiles','listowner','listnative','listcapture','savelimit','wildcard','exact','private','framed','framedlegacy','parallel','latefolder','repeatname','nativefilename','observedfilename','cancelpicker','singlelive','partialicon','framedoff','topplayer','livestopinline','off','denied','frameddenied','ownerclosed','manual','live','publicframed', ...midTransfer,'preset','fileintegrity','nativefirst','folderpresets'];
   for (const mode of cases) {
     if (mode === 'playback') { await testSavedPlayback(context,base); continue; }
     if (mode === 'moduleupdate') { await testModuleUpdate({context,base,cdn,project,extension}); continue; }
@@ -478,7 +490,7 @@ try {
       await testMergeFailure({mode,context,worker,base,top,cdn,nextQueue,startFromToolbar,panelView,expectTabIcon,until});
       continue;
     }
-    if (mode === 'missingtrack') { await testMissingAudio({context,base,cdn,nextQueue}); continue; }
+    if (mode === 'missingtrack' || mode === 'shortsound') { await testMissingAudio({mode,context,base,cdn,nextQueue}); continue; }
     if (mode === 'listprogress') { await testProgressUpdates(context,base); continue; }
     if (mode === 'listfilters') { await testListFilters(context,base,top,process.env.HLS_KEEP_OUTPUT ? scratch : null); continue; }
     if (mode === 'directpermission') {

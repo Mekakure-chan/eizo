@@ -127,7 +127,7 @@ async function acquire() {
       pair = await preparePair(videoFile, audioFile, outcome, plan.live, signal);
       outcome.duration = pair.duration;
     } else if (!plan.live && plan.extension === 'mp4') {
-      await checkMp4FileDuration(await stage.handle.getFile(), outcome.duration, signal);
+      await checkMp4FileDuration(await stage.handle.getFile(), outcome.duration, signal, {hlsArchive:true});
     }
     signal.throwIfAborted();
     result = outcome;

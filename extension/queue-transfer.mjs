@@ -203,7 +203,7 @@ export async function acquireMedia(page, { signal, stop, report, recordFormat, s
       const file = await handle.getFile(), size = file.size;
       if (!size || (result.bytes !== undefined && result.bytes !== size)) throw new Error('取得した動画データが不完全です。');
       if (!result.live && (result.kind === 'file' || job.kind === 'file') && result.extension === 'mp4') {
-        await checkMp4FileDuration(file, result.duration, signal);
+        await checkMp4FileDuration(file, result.duration, signal, {hlsArchive:job.kind === 'hls'});
       }
       result.bytes = size;
     }

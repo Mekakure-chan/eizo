@@ -9,6 +9,9 @@ test('only packaged module failures qualify and only work in flight delays a ret
   const base = 'chrome-extension://fixture/';
   assert.ok(isUpdateModuleError(mismatch.replace('./mp4.mjs',base+'mp4.mjs'),base));
   assert.ok(isUpdateModuleError('Failed to fetch dynamically imported module: '+base+'paired-mp4.mjs',base));
+  assert.ok(isUpdateModuleError(mismatch.replace('./mp4.mjs','./mp4-duration.mjs')));
+  assert.ok(isUpdateModuleError('Failed to fetch dynamically imported module: '+base+'mp4-duration.mjs',base));
+  assert.ok(isUpdateModuleError('Failed to fetch dynamically imported module: '+base+'mp4-track-time.mjs',base));
   for (const error of ['HTTP 403','Failed to fetch','QuotaExceededError', 'The extension context was invalidated.',
     mismatch.replace('./mp4.mjs','https://example.test/mp4.mjs'), 'Failed to fetch dynamically imported module: https://example.test/mp4.mjs',
     'Failed to fetch dynamically imported module: chrome-extension://another/paired-mp4.mjs']) assert.ok(!isUpdateModuleError(error,base),error);

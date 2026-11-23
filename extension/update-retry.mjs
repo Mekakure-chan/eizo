@@ -1,5 +1,5 @@
 // Only the extension's own media modules can get out of sync during an unpacked update.
-const mediaModule = /^(?:mp4|mp4-merge-(?:error|compat)|(?:paired|gapped)-mp4|queue-(?:transfer|files)|media|renditions|hls|vendor\/mediabunny-[\d.]+)\.mjs$/;
+const mediaModule = /^(?:mp4(?:-duration|-track-time)?|mp4-merge-(?:error|compat)|(?:paired|gapped)-mp4|queue-(?:transfer|files)|media|renditions|hls|vendor\/mediabunny-[\d.]+)\.mjs$/;
 
 export function isUpdateModuleError(text, base) {
   if (typeof text !== 'string') return false;

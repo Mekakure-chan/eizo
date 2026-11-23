@@ -64,7 +64,8 @@ export async function testUpdateRetry({context,base,top,cdn,extension,worker,req
       }
     });
     // A real ESM linker failure is cached in the original engine. Repair only the paired converter on disk.
-    await writeFile(pair,broken+pairCode); await writeFile(gap,broken+gapCode);
+    await writeFile(pair,"import { RemovedByUpdate } from './mp4-duration.mjs';\n"+pairCode);
+    await writeFile(gap,broken+gapCode);
     const other = await start('parallel-export-update-blocker','file',top+'/clip.mp4?variant=retry-held');
     await phase(other,'fetching');
     const [oldEngine] = await offscreen();

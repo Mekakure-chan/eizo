@@ -1,7 +1,7 @@
 import { ADTS, MPEG_TS, MP4, BlobSource, Input, EncodedPacketSink, EncodedVideoPacketSource,
   EncodedAudioPacketSource, Mp4OutputFormat, Output, StreamTarget } from './vendor/mediabunny-1.66.2.mjs';
 import { Mp4MergeError, classifyMergeError } from './mp4-merge-compat.mjs';
-import { checkTrackDuration } from './mp4-duration.mjs';
+import { checkTrackDuration, TrackTime } from './mp4-track-time.mjs';
 
 const wrapPeriod = 2 ** 33 / 90000;
 const noOverlap = '映像と音声の再生時刻が重なる区間がありません。';
@@ -92,13 +92,13 @@ async function mux(video, audio, offset, range, writer, signal, progress) {
   try {
     await output.start();
     let v = (await vi.next()).value, a = (await ai.next()).value;
-    let writtenVideo = 0, writtenAudio = 0, lastProgress = -1;
-    let videoEnd = -Infinity, audioEnd = -Infinity, outputEnd = range.origin;
+    const videoTime = new TrackTime(), audioTime = new TrackTime();
+    let lastProgress = -1, outputEnd = range.origin;
     for (;;) {
       signal.throwIfAborted();
       // End at a decode-order boundary so B-frames never lose a reference frame.
       if (v && v.timestamp >= range.limit) v = undefined;
-      const audioLimit = !v && Number.isFinite(range.limit) ? Math.min(range.limit, videoEnd) : range.limit;
+      const audioLimit = !v && Number.isFinite(range.limit) ? Math.min(range.limit, videoTime.end) : range.limit;
       if (a && a.timestamp + offset >= audioLimit) a = undefined;
       if (!v && !a) break;
       const takeVideo = v && (!a || v.timestamp <= a.timestamp + offset);
@@ -108,22 +108,20 @@ async function mux(video, audio, offset, range, writer, signal, progress) {
       if (takeVideo) {
         await image.add(packet.clone({ timestamp }), videoMeta);
         videoMeta = undefined;
-        videoEnd = Math.max(videoEnd, packet.timestamp + packet.duration);
-        writtenVideo++;
+        videoTime.add(packet.timestamp, packet.duration);
         v = (await vi.next()).value;
       } else {
         await sound.add(packet.clone({ timestamp }), audioMeta);
         audioMeta = undefined;
-        audioEnd = Math.max(audioEnd, packet.timestamp + packet.duration);
-        writtenAudio++;
+        audioTime.add(packet.timestamp, packet.duration);
         a = (await ai.next()).value;
       }
       const percentage = Math.min(99, Math.floor(100 * timestamp / (range.end - range.origin)));
       if (percentage > lastProgress) { lastProgress = percentage; progress(percentage / 100); }
     }
-    if (!writtenVideo || !writtenAudio) throw new Mp4MergeError(noOverlap);
-    checkTrackDuration('映像', video.expected, videoEnd - range.v.timestamp);
-    checkTrackDuration('音声', audio.expected, audioEnd - range.a.timestamp);
+    if (videoTime.first === Infinity || audioTime.first === Infinity) throw new Mp4MergeError(noOverlap);
+    videoTime.verify('映像', video.expected);
+    audioTime.verify('音声', audio.expected);
     image.close();
     sound.close();
     signal.throwIfAborted();
