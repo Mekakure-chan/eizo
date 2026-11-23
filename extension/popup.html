@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>埋め込み動画保存</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="popup.mjs"></script>
+</head>
+<body class="popup">
+  <header>
+    <img src="icons/48.png" width="36" height="36" alt="">
+    <div class="grow"><h1>埋め込み動画保存</h1><p id="site" class="sub"></p></div>
+    <button id="refresh" class="quiet" disabled>再検出</button>
+  </header>
+  <main>
+    <div class="popup-tools"><button id="open-manager" class="quiet">ダウンロード一覧</button></div>
+    <p id="status" role="status">ページを調べています…</p>
+    <section id="streams" hidden><h2>検出したHLS配信</h2><ul></ul></section>
+    <section id="whole" hidden><h2>動画を丸ごと保存</h2><p class="hint">再生を止めたまま、全編をMP4に保存します。</p><ul></ul></section>
+    <section id="files" hidden><h2>ファイルを保存</h2><ul></ul></section>
+    <details id="manual-hls"><summary>m3u8のURLを指定</summary>
+      <form id="hls-form"><label for="hls-url">マスターまたは映像のプレイリストURL</label>
+        <input id="hls-url" type="url" placeholder="https://example.com/live.m3u8" required autocomplete="off" spellcheck="false">
+        <label for="hls-audio">音声のURL（個別に指定する場合）</label>
+        <input id="hls-audio" type="url" placeholder="https://example.com/audio.m3u8" autocomplete="off" spellcheck="false">
+        <button type="submit">HLS保存画面へ</button>
+      </form>
+    </details>
+    <section id="players" hidden><h2>キャプチャモード</h2><p class="hint">選んだプレーヤーで再生した区間を録画します。</p><ul></ul></section>
+    <details id="frames" hidden><summary>別サイトの埋め込みを調べる</summary><ul></ul></details>
+    <div id="notes"></div>
+    <details id="detection"><summary>HLSの自動検出</summary>
+      <p class="hint">配信を見つけたタブのアイコンに「HLS」と表示します。別サイトの埋め込みや配信元も調べるため、初回は全HTTP・HTTPSサイトの読み取り許可を求めます。</p>
+      <button id="toggle" class="quiet" disabled>自動検出をオン</button>
+    </details>
+  </main>
+</body>
+</html>
