@@ -67,9 +67,10 @@ async function save(page, ready, raw, folderOnly, signal, rpc, write) {
       const handle = folder ? (reserved = await reserveDestination(folder,filename,signal)) : await spool(page.run,'export',true);
       temporary = !folder;
       writer = await handle.createWritable();
-      await output.writeTo(writer,signal,saveProgress(progress => {
+      const duration = await output.writeTo(writer,signal,saveProgress(progress => {
         void write({...writing,progress},'saving').catch(() => {});
       }));
+      if (ready.output.omittedRanges && Number.isFinite(duration)) saving.output = {...ready.output, duration};
       signal.throwIfAborted();
       if (folder && !await write({...saving,...commitStatus},'saving')) throw new DOMException('保存が中断しました。','AbortError');
       signal.throwIfAborted();
@@ -84,7 +85,8 @@ async function save(page, ready, raw, folderOnly, signal, rpc, write) {
     const savedName = reserved?.name || '動画';
     reserved = null;
     await write({run:page.run,phase:'saved',text:savedName + ' を保存しました。',progress:null,
-      ...(ready.output.omittedRanges ? {omittedRanges:ready.output.omittedRanges} : {}),
+      ...(ready.output.omittedRanges ? {omittedRanges:ready.output.omittedRanges,
+        sourceDuration:ready.output.sourceDuration, duration:saving.output.duration} : {}),
       closeViewer:folder ? page.owner : null, destinationName:saving.destinationName});
     await dropFiles(page.run).catch(() => {});
   } catch (error) {

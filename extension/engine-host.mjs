@@ -137,7 +137,8 @@ async function recover(page, state) {
       await chrome.storage.session.remove(key);
       if (item?.state === 'complete') {
         await clearSpool().catch(() => {});
-        return {run:page.run,phase:'saved',text:'動画を保存しました。',progress:null};
+        return {run:page.run,phase:'saved',text:'動画を保存しました。',progress:null,
+          ...(state.output?.omittedRanges ? {output:state.output} : {})};
       }
     }
     const text = state.saveStage === 'committing' ? '保存の確定中に処理が中断しました。保存先に同名のファイルがあるか確認してから再保存してください。'

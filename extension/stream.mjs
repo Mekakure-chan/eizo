@@ -2,6 +2,7 @@ import { openSourceChoices, openTransfer, readJob, requireOrigins } from './jobs
 import { isSourceReadError, loadJobPlan, writeLivePlan, writePlan } from './hls.mjs';
 import { safeName, timeLabel, writeMediaBlocks } from './media.mjs';
 import { exportTsAsMp4 } from './mp4.mjs';
+import { checkMp4FileDuration } from './mp4-duration.mjs';
 import { stageFile } from './staging.mjs';
 import { capturePair } from './renditions.mjs';
 import { hlsFetchFor } from './page-request.mjs';
@@ -125,6 +126,8 @@ async function acquire() {
       if (videoFile.size !== outcome.video.bytes || audioFile.size !== outcome.audio.bytes) throw new Error('取得済みのファイルサイズが一致しません。');
       pair = await preparePair(videoFile, audioFile, outcome, plan.live, signal);
       outcome.duration = pair.duration;
+    } else if (!plan.live && plan.extension === 'mp4') {
+      await checkMp4FileDuration(await stage.handle.getFile(), outcome.duration, signal);
     }
     signal.throwIfAborted();
     result = outcome;

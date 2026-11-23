@@ -13,6 +13,7 @@ import {
 } from './vendor/mediabunny-1.66.2.mjs';
 import { audioClockOffset } from './paired-mp4.mjs';
 import { Mp4MergeError, classifyMergeError } from './mp4-merge-compat.mjs';
+import { checkTrackDuration } from './mp4-duration.mjs';
 
 const EPSILON = 1e-6;
 const noOverlap = '映像と音声の再生時刻が重なる区間がありません。';
@@ -274,7 +275,7 @@ async function mux(video, audio, clipPlan, writer, signal, progress) {
       return writer.write(chunk);
     }
   }), { chunked: true, chunkSize: 1024 * 1024 });
-  const output = new Output({ format: new Mp4OutputFormat({ fastStart: false }), target });
+  const output = new Output({ format: new Mp4OutputFormat({ fastStart: 'fragmented' }), target });
   const image = new EncodedVideoPacketSource(video.codec);
   const sound = audio ? new EncodedAudioPacketSource(audio.codec) : null;
   output.addVideoTrack(image, { rotation: await video.track.getRotation() });
@@ -284,6 +285,7 @@ async function mux(video, audio, clipPlan, writer, signal, progress) {
   const ai = audio ? selectedPackets(audio, clips, 'audio', firstAxis, globalOrigin, signal) : null;
   let v, a;
   let writtenVideo = 0, writtenAudio = 0, maxTime = 0, lastProgress = -1;
+  let videoStart = Infinity, audioStart = Infinity, videoEnd = -Infinity, audioEnd = -Infinity;
   let videoMeta = { decoderConfig: video.decoderConfig };
   let audioMeta = audio ? { decoderConfig: audio.decoderConfig } : null;
   try {
@@ -299,11 +301,15 @@ async function mux(video, audio, clipPlan, writer, signal, progress) {
       maxTime = Math.max(maxTime, timestamp + item.packet.duration);
       if (takeVideo) {
         await image.add(item.packet.clone({ timestamp }), videoMeta);
+        videoStart = Math.min(videoStart, timestamp);
+        videoEnd = Math.max(videoEnd, timestamp + item.packet.duration);
         videoMeta = undefined;
         writtenVideo++;
         v = (await vi.next()).value;
       } else {
         await sound.add(item.packet.clone({ timestamp }), audioMeta);
+        audioStart = Math.min(audioStart, timestamp);
+        audioEnd = Math.max(audioEnd, timestamp + item.packet.duration);
         audioMeta = undefined;
         writtenAudio++;
         a = (await ai.next()).value;
@@ -315,6 +321,8 @@ async function mux(video, audio, clipPlan, writer, signal, progress) {
       }
     }
     if (!writtenVideo || (audio && !writtenAudio)) throw new Mp4MergeError(noOverlap);
+    checkTrackDuration('映像', expectedDuration, videoEnd - videoStart);
+    if (audio) checkTrackDuration('音声', expectedDuration, audioEnd - audioStart);
     image.close();
     sound?.close();
     signal.throwIfAborted();

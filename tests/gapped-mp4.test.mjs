@@ -110,6 +110,25 @@ test('all missing intervals fail before writing an MP4', async () => {
   );
 });
 
+test('a gapped export exposes playback metadata before the first sample', async () => {
+  const {file,tracks} = muxedGap();
+  const cut = await prepareGappedMp4(file,null,tracks);
+  try {
+    const bytes = Buffer.from(await (await writePrepared(cut)).arrayBuffer());
+    assert.ok(bytes.indexOf('moov') > 0 && bytes.indexOf('moov') < bytes.indexOf('mdat'));
+  } finally { cut.dispose(); }
+});
+
+test('a long retained interval cannot silently end after its first few video packets', async () => {
+  const {file,tracks} = muxedGap();
+  delete tracks.audio;
+  tracks.video.segments.at(-1).end = 62;
+  const cut = await prepareGappedMp4(file,null,tracks);
+  try {
+    await assert.rejects(writePrepared(cut),{name:'Mp4MergeError',message:/1:0/});
+  } finally { cut.dispose(); }
+});
+
 test('reports an irreversible join when AAC presentation times reverse across a missing fragment', async () => {
   const bytes = await readFile(new URL('./fixtures/muxed-fragments.mp4', import.meta.url));
   const last = Buffer.from(bytes.subarray(3135));

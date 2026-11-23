@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { serveArchive637, testAutoGap637 } from './automatic-gaps.mjs';
 import { testMergeFailure, testMissingAudio } from './merge-failure.mjs';
 import { testModuleUpdate } from './module-update.mjs';
+import { testSavedPlayback } from './mp4-playback.mjs';
 import { testUpdateRetry } from './update-retry.mjs';
 import { testRetryRecovery } from './retry-recovery.mjs';
 import { gapPreferenceKey } from '../../extension/queue.mjs';
@@ -57,7 +58,15 @@ FileSystemDirectoryHandle.prototype.queryPermission=function(...args) {
 chrome.runtime.onMessage.addListener((m,s,reply)=>{if(m?.destination==='hls-engine' && m.action==='start') window.partialVideoWritten=window.partialAudioWritten=false;
  if(!m?.fixtureEngine)return;
  const frame=document.querySelector('iframe');
- if(m.fixtureEngine==='reload'){window.partialVideoWritten=window.partialAudioWritten=false;frame.addEventListener('load',()=>reply({ok:true}),{once:true});frame.src=frame.src;return true;}
+ if(m.fixtureEngine==='reload'){
+  if(!frame){reply({ok:false});return;}
+  window.partialVideoWritten=window.partialAudioWritten=false;
+  // The final interruption can dispose the frame instead of loading a replacement document.
+  const removed=new MutationObserver(()=>{if(!frame.isConnected)done();});
+  function done(){removed.disconnect();frame.removeEventListener('load',done);reply({ok:true});}
+  removed.observe(document.body,{childList:true,subtree:true});
+  frame.addEventListener('load',done,{once:true});frame.src=frame.src;return true;
+ }
  reply({frames:document.querySelectorAll('iframe').length,video:!!window.partialVideoWritten,audio:!!window.partialAudioWritten});});\n(${holdTestExports.toString()})();`);
 const source = {};
 for (const kind of ['video', 'audio']) {
@@ -431,8 +440,9 @@ try {
     function assertClick() { if (!navigator.userActivation.isActive) throw Error('Missing save click'); }
   });
   const downloadCount = () => worker.evaluate(async () => (await chrome.downloads.search({})).length);
-  const cases = process.env.HLS_TEST_CASES?.split(',') || ['moduleupdate','updateretry','retryengine','retrychoice','retrysavehandoff','retryadmission','retrycancelsave','listprogress','listfilters','directinline','directpermission','slowpanel','cleanupretry','queuerecovery','fragmentcheck','segment403','gapauto637','missingtrack',...qualityModes,...damagedModes,'listlive','listfiles','listowner','listnative','listcapture','savelimit','wildcard','exact','private','framed','framedlegacy','parallel','latefolder','repeatname','nativefilename','observedfilename','cancelpicker','singlelive','partialicon','framedoff','topplayer','livestopinline','off','denied','frameddenied','ownerclosed','manual','live','publicframed', ...midTransfer,'preset','fileintegrity','nativefirst','folderpresets'];
+  const cases = process.env.HLS_TEST_CASES?.split(',') || ['playback','moduleupdate','updateretry','retryengine','retrychoice','retrysavehandoff','retryadmission','retrycancelsave','listprogress','listfilters','directinline','directpermission','slowpanel','cleanupretry','queuerecovery','fragmentcheck','segment403','gapauto637','missingtrack',...qualityModes,...damagedModes,'listlive','listfiles','listowner','listnative','listcapture','savelimit','wildcard','exact','private','framed','framedlegacy','parallel','latefolder','repeatname','nativefilename','observedfilename','cancelpicker','singlelive','partialicon','framedoff','topplayer','livestopinline','off','denied','frameddenied','ownerclosed','manual','live','publicframed', ...midTransfer,'preset','fileintegrity','nativefirst','folderpresets'];
   for (const mode of cases) {
+    if (mode === 'playback') { await testSavedPlayback(context,base); continue; }
     if (mode === 'moduleupdate') { await testModuleUpdate({context,base,cdn,project,extension}); continue; }
     await worker.evaluate(seedFolderSetting);
     if (['retryengine','retrychoice','retrysavehandoff','retryadmission','retrycancelsave'].includes(mode)) {

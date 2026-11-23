@@ -1,6 +1,7 @@
 import { ADTS, MPEG_TS, MP4, BlobSource, Input, EncodedPacketSink, EncodedVideoPacketSource,
   EncodedAudioPacketSource, Mp4OutputFormat, Output, StreamTarget } from './vendor/mediabunny-1.66.2.mjs';
 import { Mp4MergeError, classifyMergeError } from './mp4-merge-compat.mjs';
+import { checkTrackDuration } from './mp4-duration.mjs';
 
 const wrapPeriod = 2 ** 33 / 90000;
 const noOverlap = '映像と音声の再生時刻が重なる区間がありません。';
@@ -82,7 +83,7 @@ async function mux(video, audio, offset, range, writer, signal, progress) {
   // The caller owns the file transaction. Only it may commit after the final cancel check.
   const target = new StreamTarget(new WritableStream({ write(chunk) { signal.throwIfAborted(); return writer.write(chunk); } }),
     { chunked: true, chunkSize: 1024 * 1024 });
-  const output = new Output({ format: new Mp4OutputFormat({ fastStart: false }), target });
+  const output = new Output({ format: new Mp4OutputFormat({ fastStart: 'fragmented' }), target });
   const image = new EncodedVideoPacketSource(video.codec), sound = new EncodedAudioPacketSource(audio.codec);
   output.addVideoTrack(image, { rotation: await video.track.getRotation() });
   output.addAudioTrack(sound);
@@ -92,7 +93,7 @@ async function mux(video, audio, offset, range, writer, signal, progress) {
     await output.start();
     let v = (await vi.next()).value, a = (await ai.next()).value;
     let writtenVideo = 0, writtenAudio = 0, lastProgress = -1;
-    let videoEnd = -Infinity, outputEnd = range.origin;
+    let videoEnd = -Infinity, audioEnd = -Infinity, outputEnd = range.origin;
     for (;;) {
       signal.throwIfAborted();
       // End at a decode-order boundary so B-frames never lose a reference frame.
@@ -113,6 +114,7 @@ async function mux(video, audio, offset, range, writer, signal, progress) {
       } else {
         await sound.add(packet.clone({ timestamp }), audioMeta);
         audioMeta = undefined;
+        audioEnd = Math.max(audioEnd, packet.timestamp + packet.duration);
         writtenAudio++;
         a = (await ai.next()).value;
       }
@@ -120,6 +122,8 @@ async function mux(video, audio, offset, range, writer, signal, progress) {
       if (percentage > lastProgress) { lastProgress = percentage; progress(percentage / 100); }
     }
     if (!writtenVideo || !writtenAudio) throw new Mp4MergeError(noOverlap);
+    checkTrackDuration('映像', video.expected, videoEnd - range.v.timestamp);
+    checkTrackDuration('音声', audio.expected, audioEnd - range.a.timestamp);
     image.close();
     sound.close();
     signal.throwIfAborted();
@@ -145,6 +149,12 @@ export async function preparePair(videoFile, audioFile, capture, live, signal) {
     const format = new Mp4OutputFormat();
     const video = await inspect(videoInput, 'video', format);
     const audio = await inspect(audioInput, 'audio', format);
+    if (!live && !capture.partial) {
+      video.expected = capture.video.duration;
+      audio.expected = capture.audio.duration;
+      checkTrackDuration('映像', video.expected, video.end - video.first.timestamp);
+      checkTrackDuration('音声', audio.expected, audio.end - audio.first.timestamp);
+    }
     const offset = await audioClockOffset(video, audio, audioInput, capture);
     const range = await clip(video, audio, offset, live, capture.partial);
     return { duration: range.end - range.origin, dispose,

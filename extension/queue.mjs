@@ -1,4 +1,4 @@
-import { httpUrl } from './media.mjs';
+import { httpUrl, timeLabel } from './media.mjs';
 import { blocksUpdateRetry, isAcquisitionUpdateFailure } from './update-retry.mjs';
 
 export const pagePrefix = 'download-page:';
@@ -14,7 +14,11 @@ export function omissionText(state, limit) {
   const ranges = state.omittedRanges ?? state.output?.omittedRanges;
   if (!ranges?.length) return '';
   const shown = limit ? ranges.slice(0,limit) : ranges;
-  return shown.join('、') + (shown.length < ranges.length ? ' ほか' + (ranges.length - shown.length) + '件' : '');
+  const source = state.output?.sourceDuration ?? state.sourceDuration;
+  const duration = state.output?.duration ?? state.duration;
+  const times = source > 0 && duration > 0 ? '元の長さ ' + timeLabel(source) + '、' +
+    (state.phase === 'saved' ? '保存した長さ ' : '保存予定の長さ ') + timeLabel(duration) + '。' : '';
+  return times + shown.join('、') + (shown.length < ranges.length ? ' ほか' + (ranges.length - shown.length) + '件' : '');
 }
 
 export const phaseNames = {

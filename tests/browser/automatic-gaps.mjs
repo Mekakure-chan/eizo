@@ -46,6 +46,7 @@ export async function testAutoGap637({context, worker, top, cdn, base, startFrom
       const row = list.locator('#list li').filter({hasText:'欠損テスト637'});
       await row.locator('.phase[data-state="saved"]').waitFor();
       assert.match(await row.textContent(),/8\/637 区間目（0:30〜0:34）/);
+      assert.match(await row.textContent(),/元の長さ 42:30、保存した長さ 42:26/);
       const movie = await list.evaluate(async () => {
         const root=await navigator.storage.getDirectory(), folder=await root.getDirectoryHandle('自動スキップ');
         const file=await (await folder.getFileHandle('欠損テスト637（欠損あり）.mp4')).getFile();

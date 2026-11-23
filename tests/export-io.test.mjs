@@ -68,6 +68,112 @@ test('invalid or incomplete TS boundaries cannot produce a successful export',as
   assert.equal(written.length,2,'only the first segment and its initialization may have been written');
 });
 
+test('a repeated TS clock starts a new stretch of the saved movie instead of overwriting its playback time', async () => {
+  const cycles = 24;
+  const file = new Blob(Array(cycles).fill(ts));
+  const boundaries = Array.from({length:cycles}, (_, i) => ends.map(end => i * ts.length + end)).flat();
+  const chunks = [];
+  await exportTsAsMp4(file, boundaries, 36, {write:chunk => chunks.push(chunk)}, new AbortController().signal, () => {});
+  const input = new Input({formats:[MP4], source:new BlobSource(new Blob(chunks))});
+  try {
+    for (const [track, count] of [[await input.getPrimaryVideoTrack(), 360], [await input.getPrimaryAudioTrack(), 1704]]) {
+      let n = 0, previous = -Infinity, end = 0;
+      for await (const packet of new EncodedPacketSink(track).packets()) {
+        assert.ok(packet.timestamp > previous, 'the fixture has no reordered frames');
+        previous = packet.timestamp;
+        end = packet.timestamp + packet.duration;
+        n++;
+      }
+      assert.equal(n,count);
+      assert.ok(end >= 36 - .03 && end < 36.5, 'the last packet must reach the end of the movie');
+    }
+  } finally { input.dispose(); }
+});
+
+test('a short TS payload cannot be reported as a full length MP4 by setting its movie header', async () => {
+  await assert.rejects(exportTsAsMp4(new Blob([ts]),ends,36,{write(){}},new AbortController().signal,()=>{}),
+    {name:'Mp4MergeError',message:/0:36/});
+});
+
+test('overlapping but increasing TS clocks cannot conceal a substantially short output timeline', async () => {
+  const blocks = [];
+  // The same closed GOP advances by just 0.1 s per 0.5 s segment. Shift the
+  // PTS/DTS in the PES headers while leaving all encoded audio and video intact.
+  for (let i=0; i<24; i++) {
+    const block = ts.slice(0, ends[0]);
+    for (let at=0; at<block.length; at+=188) {
+      if (!(block[at+1] & 64) || !(block[at+3] & 16)) continue;
+      const pes = at + 4 + ((block[at+3] & 32) ? block[at+4]+1 : 0);
+      if (block[pes] || block[pes+1] || block[pes+2] !== 1 || !(block[pes+7] & 128)) continue;
+      const stamps = (block[pes+7] & 64) ? 2 : 1;
+      for (let j=0; j<stamps; j++) {
+        const p = pes + 9 + 5*j;
+        const time = (block[p] & 14)*2**29 + block[p+1]*2**22 + (block[p+2] >> 1)*2**15 +
+          block[p+3]*128 + (block[p+4] >> 1) + i*9000;
+        block[p] = (block[p]&0xf1) | ((Math.floor(time/2**30)&7)<<1);
+        block[p+1] = Math.floor(time/2**22)&255;
+        block[p+2] = ((Math.floor(time/2**15)&127)<<1)|1;
+        block[p+3] = Math.floor(time/128)&255;
+        block[p+4] = ((time&127)<<1)|1;
+      }
+    }
+    blocks.push(block);
+  }
+  await assert.rejects(exportTsAsMp4(new Blob(blocks),blocks.map((_,i)=>(i+1)*ends[0]),12,
+    {write(){}},new AbortController().signal,()=>{}),{name:'Mp4MergeError',message:/0:12/});
+});
+
+test('a seekable TS export puts an index before the payload with correct byte ranges and times', async () => {
+  const bytes = Buffer.alloc(32768);
+  let pos = 0, size = 0;
+  const writer = {
+    seek(offset) { pos = offset; },
+    write(chunk) {
+      if (chunk.type === 'write') { pos = chunk.position; chunk = chunk.data; }
+      bytes.set(chunk,pos); pos += chunk.length; size = Math.max(size,pos);
+    }
+  };
+  await exportTsAsMp4(new Blob([ts]),ends,1.5,writer,new AbortController().signal,()=>{});
+  const start = bytes.indexOf('sidx') - 4;
+  assert.ok(start > 0 && start < bytes.indexOf('mdat'), 'players can read the seek table in the initial range');
+  assert.equal(bytes[start+8],1);
+  assert.equal(bytes.readUInt32BE(start+16),90000);
+  assert.equal(bytes.readBigUInt64BE(start+20),0n);
+  assert.equal(bytes.readBigUInt64BE(start+28),0n);
+  assert.equal(bytes.readUInt16BE(start+38),3);
+  let target = start + bytes.readUInt32BE(start);
+  for (let i=0; i<3; i++) {
+    assert.equal(bytes.toString('ascii',target+4,target+8),'moof');
+    const entry = start+40+12*i;
+    assert.equal(bytes.readUInt32BE(entry+4),45000);
+    target += bytes.readUInt32BE(entry);
+  }
+  assert.equal(target,size);
+});
+
+test('a complete HTTP response with only a short fMP4 cannot become a ready HLS archive', async t => {
+  const media = await readFile(new URL('./fixtures/muxed-fragments.mp4',import.meta.url));
+  const base = 'https://local.example/';
+  const resources = new Map([
+    [base+'list.m3u8','#EXTM3U\n#EXT-X-MAP:URI="init.mp4"\n#EXTINF:60,\npart.m4s\n#EXT-X-ENDLIST'],
+    [base+'init.mp4',media.subarray(0,1306)], [base+'part.m4s',media.subarray(1306)]
+  ]);
+  const chunks = [];
+  const file = {createWritable:async () => ({write:async bytes=>chunks.push(bytes),close:async()=>{},abort:async()=>{}}),
+    getFile:async () => new Blob(chunks)};
+  const folder = {getDirectoryHandle:async()=>folder,getFileHandle:async name=>name==='video' ? file : {
+    createWritable:async()=>({write:async()=>{},close:async()=>{}})}};
+  Object.defineProperty(navigator,'storage',{configurable:true,value:{getDirectory:async()=>folder}});
+  t.after(()=>{delete navigator.storage;});
+  const signal = new AbortController().signal;
+  const openPlayer = async () => ({dispose:async()=>{}, fetchResource:async url=>{
+    const response = new Response(resources.get(url));
+    return Object.defineProperty(response,'url',{value:url});
+  }});
+  await assert.rejects(acquireMedia({run:crypto.randomUUID(),job:{kind:'hls',url:base+'list.m3u8'}},
+    {openPlayer,signal,stop:signal,authorize:async()=>{},report:()=>{}}),{name:'Mp4MergeError',message:/1:00/});
+});
+
 test('ready media goes to the file writer in bounded file-backed slices, with progress and cancellation',async t => {
   const bytes = new Uint8Array(17*1024*1024+53);
   for (let n=0;n<bytes.length;n+=12991) bytes[n]=(n%251)+1;

@@ -4,6 +4,7 @@ import { queuePlayer } from './queue-player.mjs';
 import { requireOrigins } from './jobs.mjs';
 import { safeName, timeLabel, writeMediaBlocks } from './media.mjs';
 import { exportTsAsMp4 } from './mp4.mjs';
+import { checkMp4FileDuration } from './mp4-duration.mjs';
 import { Mp4MergeError } from './mp4-merge-compat.mjs';
 import { checkWholeHelper, downloadWhole, nativePermission } from './whole.mjs';
 import { recordVideo } from './recording.mjs';
@@ -109,7 +110,8 @@ function archiveResult(output, tracks) {
         gapClock(parts[first].start) + '〜' + gapClock(parts[i].end) + '）');
     }
   }
-  return omittedRanges.length ? {kind:'gapped', extension:'mp4', bytes:output.bytes, tracks, omittedRanges} : output;
+  return omittedRanges.length ? {kind:'gapped', extension:'mp4', bytes:output.bytes, tracks, omittedRanges,
+    sourceDuration:tracks.video.segments.at(-1).end} : output;
 }
 
 async function openGapped(run, result, signal) {
@@ -148,7 +150,7 @@ async function acquireHls(run, job, writer, signal, stop, report, fetchResource,
   if (plan.live) outcome = await writeLivePlan(plan, writer, signal, stop, authorize, update, fetchResource);
   else outcome = { bytes: await writePlan(plan, writer, signal, update, authorize, fetchResource, tracks?.video, previousFailure),
     duration: plan.duration, count: plan.parts.length };
-  return archiveResult({ ...outcome, kind: plan.extension === 'ts' ? 'ts' : 'file', extension: 'mp4', ends }, tracks);
+  return archiveResult({ ...outcome, kind: plan.extension === 'ts' ? 'ts' : 'file', extension: 'mp4', live:plan.live, ends }, tracks);
 }
 
 export async function acquireMedia(page, { signal, stop, report, recordFormat, skipGaps = false, previousFailure, openPlayer = queuePlayer, authorize = requireOrigins }) {
@@ -198,15 +200,18 @@ export async function acquireMedia(page, { signal, stop, report, recordFormat, s
       const pair = await openPair(run, result, signal);
       try { result.duration = pair.duration; } finally { pair.dispose(); }
     } else {
-      const size = (await handle.getFile()).size;
+      const file = await handle.getFile(), size = file.size;
       if (!size || (result.bytes !== undefined && result.bytes !== size)) throw new Error('取得した動画データが不完全です。');
+      if (!result.live && (result.kind === 'file' || job.kind === 'file') && result.extension === 'mp4') {
+        await checkMp4FileDuration(file, result.duration, signal);
+      }
       result.bytes = size;
     }
     await putResult(run, result);
     signal.throwIfAborted();
     return { extension: result.extension, raw: result.kind === 'ts', bytes: result.bytes, duration: result.duration || 0,
       interruption: result.interruption || '', sourceReadError: !!result.sourceReadError,
-      ...(result.omittedRanges ? {omittedRanges:result.omittedRanges} : {}) };
+      ...(result.omittedRanges ? {omittedRanges:result.omittedRanges, sourceDuration:result.sourceDuration} : {}) };
   } catch (error) { await writer.abort().catch(() => {}); throw error; }
 }
 
@@ -215,7 +220,7 @@ export async function openExport(run, ext) {
   if (result.kind === 'gapped' || result.kind === 'pair') {
     return { async writeTo(writer, signal, progress) {
       const pair = result.kind === 'gapped' ? await openGapped(run, result, signal) : await openPair(run, result, signal);
-      try { await pair.writeTo(writer, signal, progress); } finally { pair.dispose(); }
+      try { return await pair.writeTo(writer, signal, progress); } finally { pair.dispose(); }
     } };
   }
   const file = await readFile(run, 'video', result.bytes);
@@ -227,5 +232,5 @@ export async function openExport(run, ext) {
 
 export async function exportMedia(run, ext, writer, signal, progress) {
   const output = await openExport(run,ext);
-  await output.writeTo(writer,signal,progress);
+  return output.writeTo(writer,signal,progress);
 }

@@ -334,15 +334,16 @@ async function save(raw) {
       writer = await destination.createWritable();
       const saving = {...ready,phase:'saving',saveStage:null,progressDetail:null,text:storageSaveText};
       await writeState(id, page.run, {...saving,progress:0});
-      await exportMedia(page.run, ext, writer, controller.signal, saveProgress(progress => {
+      const duration = await exportMedia(page.run, ext, writer, controller.signal, saveProgress(progress => {
         void writeState(id,page.run,{...saving,progress},'saving').catch(notice);
       }));
+      if (ready.output.omittedRanges && Number.isFinite(duration)) saving.output = {...ready.output, duration};
       controller.signal.throwIfAborted();
       if (!await writeState(id,page.run,{...saving,...commitStatus},'saving')) throw new DOMException('保存が中断しました。','AbortError');
       controller.signal.throwIfAborted();
       await writer.close();
       writer = null;
-      await writeState(id, page.run, { ...ready, phase: 'saved', text: destination.name + ' を保存しました。', progress: null });
+      await writeState(id, page.run, { ...ready, output:saving.output, phase: 'saved', text: destination.name + ' を保存しました。', progress: null });
       await dropFiles(page.run).catch(() => {});
     });
   } catch (error) {
