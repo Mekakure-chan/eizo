@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "埋め込み動画保存",
-  "version": "1.6.15",
+  "name": "映蔵｜埋め込み動画保存",
+  "version": "1.6.16",
   "description": "タブでHLSを自動検出し、ライブやアーカイブをMP4に保存します。動画ファイルの取得と再生区間のキャプチャにも対応します。",
   "minimum_chrome_version": "109",
   "incognito": "split",
@@ -16,7 +16,7 @@
     "128": "icons/128.png"
   },
   "action": {
-    "default_title": "埋め込み動画を探す",
+    "default_title": "映蔵｜埋め込み動画保存\n埋め込み動画を探す",
     "default_popup": "popup.html"
   }
 }

@@ -4,6 +4,7 @@ import { folderLabel, getFolderSettings, maxSaveFolders, selectedFolder } from '
 const $ = id => document.getElementById(id);
 
 export function createFolderControls(scope, {onRefresh, saveWaiting, notice}) {
+  const extensionName = chrome.runtime.getManifest().name;
   const channel = new BroadcastChannel('embedded-video-save-folder-' + scope);
   let active, version = 0;
 
@@ -15,7 +16,7 @@ export function createFolderControls(scope, {onRefresh, saveWaiting, notice}) {
     try {
       const reply = new Promise((resolve, reject) => {
         // After unpacking an update, Chrome may still be running the previous worker.
-        timer = setTimeout(() => reject(new Error('保存先の設定に応答がありません。取得・保存が終わったら、Chromeの拡張機能画面で「埋め込み動画保存」を再読み込みし、一覧を開き直してください。')), 10000);
+        timer = setTimeout(() => reject(new Error('保存先の設定に応答がありません。取得・保存が終わったら、Chromeの拡張機能画面で「' + extensionName + '」を再読み込みし、一覧を開き直してください。')), 10000);
         port1.onmessage = ({data}) => {
           clearTimeout(timer);
           if (data.received) return;

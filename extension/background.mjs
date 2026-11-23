@@ -5,6 +5,7 @@ import { handleQueueRequest, managerClosed } from './queue.mjs';
 import { cleanQueueFiles } from './queue-files.mjs';
 
 registerEngine();
+const manifest = chrome.runtime.getManifest();
 const queues = new Map();
 let enabled = chrome.storage.local.get(detectionSetting).then(value => !!value[detectionSetting]);
 function changeTab(tabId, update) {
@@ -19,7 +20,9 @@ function changeTab(tabId, update) {
     const count = new Set(next.map(s => s.url)).size;
     await Promise.all([
       chrome.action.setBadgeText({ tabId, text: count ? 'HLS' : '' }),
-      chrome.action.setTitle({ tabId, title: count ? 'HLS配信を' + count + '件検出 · クリックして取得' : '埋め込み動画を探す' })
+      chrome.action.setTitle({ tabId, title: count
+        ? manifest.name + '\nHLS配信を' + count + '件検出 · クリックして取得'
+        : manifest.action.default_title })
     ]);
   }).catch(error => {
     if (!/tab|frame|closed/i.test(error.message || '')) console.warn('HLS検出状態を更新できませんでした。', error.name);

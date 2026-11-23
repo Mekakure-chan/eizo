@@ -135,9 +135,10 @@ if (-not $runtime) {
         [IO.Directory]::Move($stage, $runtime)
     } finally { Remove-InstallFolder $stage $runtimes }
 }
+$extensionManifest = Get-Content -LiteralPath (Join-Path $extension 'manifest.json') -Encoding UTF8 -Raw | ConvertFrom-Json
 $config = [ordered]@{
     name = $nativeName
-    description = 'Embedded Video Saver full-length downloads'
+    description = $extensionManifest.name + ' - full-length downloads'
     path = (Join-Path $runtime 'VideoHost.exe')
     type = 'stdio'
     allowed_origins = @("chrome-extension://$ExtensionId/")

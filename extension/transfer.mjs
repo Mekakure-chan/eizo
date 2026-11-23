@@ -7,6 +7,7 @@ import { recordFormats, recordMime, recordVideo } from './recording.mjs';
 import { acquireSaveSlot, commitStatus, saveWaitText, storageSaveText } from './save-folder.mjs';
 
 const $ = id => document.getElementById(id);
+const extensionName = chrome.runtime.getManifest().name;
 let job, plan, pendingOrigins, controller, liveStop, recordStop, fetchResource, working = false;
 
 function actions(...ids) {
@@ -74,7 +75,7 @@ async function prepare() {
       return;
     }
     $('heading').textContent = plan.live ? 'HLSライブを保存' : 'HLSアーカイブを保存';
-    document.title = $('heading').textContent + ' · 埋め込み動画保存';
+    document.title = $('heading').textContent + ' · ' + extensionName;
     $('start').textContent = plan.live ? '保存先を選んでライブ保存' : '保存先を選んで全編を保存';
     $('cancel').textContent = plan.live ? '破棄' : '中止';
     const length = (plan.live ? '現在の公開範囲 ' : '') + timeLabel(plan.duration);
@@ -220,7 +221,7 @@ async function initialize() {
   if (!job) { say('動画ページで拡張を開き、保存する動画を選んでください。', true); return; }
   fetchResource = hlsFetchFor(job.pageSources);
   $('heading').textContent = job.kind === 'whole' ? '動画を丸ごと保存' : job.kind === 'record' ? 'キャプチャモード' : 'HLS動画を直接保存';
-  document.title = $('heading').textContent + ' · 埋め込み動画保存';
+  document.title = $('heading').textContent + ' · ' + extensionName;
   $('title').textContent = job.label;
   $('source').textContent = job.host;
   await prepare();
