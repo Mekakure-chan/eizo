@@ -12,9 +12,15 @@ table{width:100%;border-collapse:collapse;margin:1rem 0}th,td{padding:.55rem .68
 details{margin:.8rem 0;border:1px solid #d7e2df;padding:.4rem .8rem;border-radius:7px}summary{cursor:pointer;font-weight:650}pre{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6;font-size:.85rem}
 footer{padding-block:1rem 2rem}section,h2,details{scroll-margin-top:1rem}
 @media(max-width:50rem){main{border-inline:0;border-radius:0}nav{column-gap:1rem}}@media print{nav,footer{display:none}body,main{background:white;border:0;padding:0}img{break-inside:avoid}h2,h3{break-after:avoid}}</style></head>
-<body id="top"><nav aria-label="ページ内の目次"><a href="#install">導入</a><a href="#setup">初回設定</a><a href="#save">動画の保存</a><a href="#formats">対応形式</a><a href="#storage">保存場所と権限</a><a href="#help">困ったとき</a><a href="#maintenance">更新と削除</a><a href="#usage">利用条件</a></nav>
+<body id="top"><nav aria-label="ページ内の目次"><a href="#about">この拡張について</a><a href="#install">導入</a><a href="#setup">初回設定</a><a href="#save">動画の保存</a><a href="#formats">対応形式</a><a href="#storage">保存場所と権限</a><a href="#help">困ったとき</a><a href="#maintenance">更新と削除</a><a href="#usage">利用条件</a></nav>
 <main><h1>埋め込み動画保存</h1>
-<p>Webページに埋め込まれた動画を、パソコンの好きなフォルダーに保存するGoogle Chrome拡張機能です。録画済みのHLS配信なら、動画を最後まで再生せずにMP4として保存できます。保存先を一度登録すれば、次からは取得を始めるだけでファイルが保存されます。</p>
+<h2 id="about">この拡張機能でできること</h2>
+<p>Webページに埋め込まれた動画やHLS配信を、パソコンの好きなフォルダーに保存するGoogle Chrome拡張機能です。</p>
+<ul>
+<li><strong>保存先のHDDへの書き込み負荷を抑えます。</strong> 複数のタブで動画を並行して取得しながら、指定フォルダーには1本ずつ順番に書き込みます。</li>
+<li><strong>録画済みのHLSは、最後まで再生せずにMP4で保存できます。</strong> 映像と音声が別々に配信されていても、対応形式なら1本のMP4にまとめます。</li>
+<li><strong>保存先を一度登録すれば、取得を始めるだけで自動保存できます。</strong> 1本の取得や結合に失敗しても、ほかの動画の処理は続きます。結果はあとからダウンロード一覧で確認できます。</li>
+</ul>
 <h2 id="install">Chromeに追加する</h2>
 <ol>
 <li>配布版1.6.15のZIPを、使い続けるフォルダーにすべて展開します。同梱の <code>使い方.html</code> を開くと、この案内をオフラインでも読めます。</li>
