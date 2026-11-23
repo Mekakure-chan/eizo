@@ -36,10 +36,10 @@ function pathName(url) {
 }
 
 export function safeName(label, extension) {
-  let stem = (label || '動画').normalize('NFC').replace(/\.(?:m3u8|mpd|mp4|webm|ogv|mov|m4v|mkv|mpg|mpeg|avi|3gp|ts)$/i, '');
+  let stem = (label || '動画').normalize('NFC').trimEnd().replace(/\.(?:m3u8|mpd|mp4|webm|ogv|mov|m4v|mkv|mpg|mpeg|avi|3gp|ts)$/i, '');
   stem = stem.replace(/[<>:"/\\|?*\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g, '_').trim();
   stem = [...stem].slice(0, 64).join('').replace(/^\.+|[ .]+$/g, '') || '動画';
-  if (/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(stem)) stem = '_' + stem;
+  if (/^(?:con|prn|aux|nul|(?:com|lpt)[1-9¹²³])(?:\.|$)/i.test(stem)) stem = '_' + stem;
   return stem + '.' + extension;
 }
 

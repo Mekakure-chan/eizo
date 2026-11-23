@@ -13,7 +13,7 @@ export async function acquireRun(page, controller, stop, write, {expectedPhase, 
   await navigator.locks.request(runLock(run), async () => {
     function publishProgress() {
       clearTimeout(pending); pending = undefined; last = Date.now();
-      void write({ ...snapshot }).catch(onError);
+      void write({ ...snapshot }, phase).catch(onError);
     }
     function report(text, value = snapshot.progress, extra) {
       const progress = Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : null;
@@ -26,6 +26,7 @@ export async function acquireRun(page, controller, stop, write, {expectedPhase, 
       if (extra?.info !== undefined || extra?.readerMode || delay <= 0) publishProgress();
       else pending ??= setTimeout(publishProgress, delay);
     }
+    let ready;
     try {
       await dropFiles(run);
       skipGaps = page.job.kind === 'hls' && (skipGaps || await readGapSetting());
@@ -33,22 +34,25 @@ export async function acquireRun(page, controller, stop, write, {expectedPhase, 
       clearTimeout(pending);
       const text = output.omittedRanges?.length ? '欠損区間を除いて取得しました。動画を保存できます。' :
         output.interruption ? '取得できた区間を保存できます。 ' + output.interruption : '取得が完了しました。動画を保存できます。';
-      await write({ phase: 'ready', text, progress: null, output, sourceProblem: output.sourceReadError });
+      ready = { phase: 'ready', text, progress: null, output, sourceProblem: output.sourceReadError };
     } catch (error) {
       clearTimeout(pending);
       controller.abort();
       if (await finishMergeFailure(run,error,snapshot.omittedRanges,next => write(next,'fetching'))) return;
       await dropFiles(run).catch(() => {});
       const permission = error.permission || (error.origins?.length ? { origins: error.origins } : null);
-      const phase = permission ? 'permission' : error.name === 'AbortError' ? 'canceled' : 'failed';
-      const text = phase === 'canceled' ? '取得を中止しました。' : error.name === 'QuotaExceededError'
+      const outcome = permission ? 'permission' : error.name === 'AbortError' ? 'canceled' : 'failed';
+      const text = outcome === 'canceled' ? '取得を中止しました。' : error.name === 'QuotaExceededError'
         ? '一時保存領域が足りません。ディスクの空きを確認してから再取得してください。' : error.message;
       const lostOriginal = snapshot.readerMode === 'detached' && isSourceReadError(error);
-      await write({ phase, text, progress: null, permission, sourceProblem: isSourceReadError(error),
-        ...(phase === 'failed' && error.canSkip ? {canSkip:true, skipSegment:error.skipSegment ?? null} : {}),
+      await write({ phase:outcome, text, progress: null, permission, sourceProblem: isSourceReadError(error),
+        ...(outcome === 'failed' && error.canSkip ? {canSkip:true, skipSegment:error.skipSegment ?? null} : {}),
         ...((permission || isUpdateModuleError(text)) && skipGaps ? {resumeWithGaps:true, skipSegment:previousFailure ?? null} : {}),
         readerDisconnected: !!error.readerDisconnected,
-        info: lostOriginal ? '検出した元プレーヤーとの接続が切れています。元ページを開いて再検出してください。' : '' });
+        info: lostOriginal ? '検出した元プレーヤーとの接続が切れています。元ページを開いて再検出してください。' : '' }, phase);
+      return;
     }
+    // A lost queue notification must not delete a fully acquired file.
+    await write(ready, phase);
   });
 }

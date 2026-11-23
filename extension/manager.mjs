@@ -326,19 +326,25 @@ async function save(raw) {
   const filename = exportName(page,ready.output,ext);
   const controller = new AbortController();
   operation = controller;
-  let writer, releaseSlot;
+  let writer, releaseSlot, cancelPicker, phase = 'ready';
   try {
-    const picking = showSaveFilePicker({ suggestedName: filename });
+    const picking = new Promise((resolve,reject) => {
+      cancelPicker = () => reject(controller.signal.reason);
+      controller.signal.addEventListener('abort',cancelPicker,{once:true});
+      showSaveFilePicker({suggestedName:filename}).then(resolve,reject);
+    });
     picking.catch(() => {});
     if (!await writeState(id, page.run, { ...ready, phase:'saveQueued', saveStage:'choosing', text:'保存先を選んでいます…', progress:null }, 'ready')) return;
+    phase = 'saveQueued';
     const destination = await picking;
     await navigator.locks.request(runLock(page.run), async () => {
       if (!await writeState(id, page.run, {...ready,phase:'saveQueued',saveStage:null,text:saveWaitText,progress:null},'saveQueued')) return;
       releaseSlot = await acquireSaveSlot(controller.signal);
       controller.signal.throwIfAborted();
-      writer = await destination.createWritable();
       const saving = {...ready,phase:'saving',saveStage:null,progressDetail:null,text:storageSaveText};
-      await writeState(id, page.run, {...saving,progress:0});
+      if (!await writeState(id,page.run,{...saving,progress:0},phase)) return;
+      phase = 'saving';
+      writer = await destination.createWritable();
       const duration = await exportMedia(page.run, ext, writer, controller.signal, saveProgress(progress => {
         void writeState(id,page.run,{...saving,progress},'saving').catch(notice);
       }));
@@ -348,19 +354,23 @@ async function save(raw) {
       controller.signal.throwIfAborted();
       await writer.close();
       writer = null;
-      await writeState(id, page.run, { ...ready, output:saving.output, phase: 'saved', text: destination.name + ' を保存しました。', progress: null });
-      await dropFiles(page.run).catch(() => {});
+      if (await writeState(id,page.run,{...ready,output:saving.output,phase:'saved',text:destination.name + ' を保存しました。',progress:null},phase)) {
+        await dropFiles(page.run).catch(() => {});
+      }
     });
   } catch (error) {
     if (writer) await writer.abort().catch(() => {});
     if (await finishMergeFailure(page.run,error,ready.output.omittedRanges,next => writeState(id,page.run,next,'saving'))) return;
     if (error.missingSpool) {
-      await writeState(id, page.run, { phase: 'interrupted', text: error.message, progress: null });
+      await writeState(id,page.run,{phase:'interrupted',text:error.message,progress:null},phase);
       return;
     }
     const text = error.name === 'AbortError' ? '保存をキャンセルしました。取得済みの動画は保存待ちです。' : '保存できませんでした。' + error.message;
-    await writeState(id, page.run, { ...ready, text });
-  } finally { releaseSlot?.(); operation = null; }
+    await writeState(id,page.run,{...ready,text},phase);
+  } finally {
+    controller.signal.removeEventListener('abort',cancelPicker);
+    releaseSlot?.(); operation = null;
+  }
 }
 
 $('all').onclick = () => sendQueue('queue-index').catch(notice);

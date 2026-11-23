@@ -1,3 +1,4 @@
+import { incompletePart, mp4BoxReader } from './mp4-boxes.mjs';
 import { httpUrl, timeLabel } from './media.mjs';
 
 function attrs(line) {
@@ -264,66 +265,7 @@ function checkHeader(bytes, format) {
   if (['ts', 'audio'].includes(format) && bytes.length >= 188 && bytes[0] === 0x47 && (bytes.length === 188 || bytes[188] === 0x47)) return 'ts';
   if (format === 'audio' && ((bytes.length >= 7 && bytes[0] === 0xff && (bytes[1] & 0xf6) === 0xf0) ||
       (bytes.length >= 10 && bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33))) return 'aac';
-  const box = String.fromCharCode(...bytes.subarray(4, 8));
-  if (format === 'init' && ['ftyp', 'moov', 'free'].includes(box)) return;
-  if (format === 'mp4' && ['styp', 'sidx', 'moof', 'emsg', 'prft', 'free'].includes(box)) return;
   throw Object.assign(new Error('受信データが想定する動画形式と一致しません。保存を中止しました。'), {invalidMedia:true});
-}
-
-function incompletePart() {
-  return Object.assign(new Error('配信元の区間データが途中で終了しました。'), { retryable:true, invalidMedia:true });
-}
-
-// Check top-level box boundaries as bytes arrive. Only the current header is buffered.
-function mp4SegmentReader(format) {
-  const header = new Uint8Array(16);
-  const view = new DataView(header.buffer);
-  let filled = 0, headerSize = 8, remaining = 0, first = true;
-  let hasMovie = false, hasFragment = false, needsData = false;
-  let openEndedAt;
-  return {
-    push(bytes, blockOffset) {
-      let offset = 0;
-      while (offset < bytes.length) {
-        if (remaining > 0) {
-          const count = Math.min(remaining, bytes.length - offset);
-          remaining -= count;
-          offset += count;
-          continue;
-        }
-        const count = Math.min(headerSize - filled, bytes.length - offset);
-        header.set(bytes.subarray(offset, offset + count), filled);
-        offset += count;
-        filled += count;
-        if (filled < headerSize) continue;
-        let size = view.getUint32(0);
-        if (size === 1 && headerSize === 8) { headerSize = 16; continue; }
-        if (first) { checkHeader(header, format); first = false; }
-        if (headerSize === 16) size = Number(view.getBigUint64(8));
-        else if (size === 0) {
-          openEndedAt = blockOffset + offset - headerSize;
-          size = Infinity;
-        }
-        if (size !== Infinity && (!Number.isSafeInteger(size) || size < headerSize)) {
-          throw Object.assign(new Error('MP4の区間データに不正なボックス長があります。'), {invalidMedia:true});
-        }
-        const type = String.fromCharCode(...header.subarray(4, 8));
-        if (type === 'moov') hasMovie = true;
-        if (type === 'moof') {
-          if (needsData) throw incompletePart();
-          hasFragment = needsData = true;
-        } else if (type === 'mdat') needsData = false;
-        remaining = size - headerSize;
-        filled = 0;
-        headerSize = 8;
-      }
-    },
-    finish() {
-      if (filled || (remaining && remaining !== Infinity) ||
-          (format === 'init' ? !hasMovie : !hasFragment || needsData)) throw incompletePart();
-      return openEndedAt;
-    }
-  };
 }
 
 async function readChunk(reader, url, signal) {
@@ -346,7 +288,7 @@ async function copyPart(part, format, writer, signal, checkAccess, fetchResource
       const range = /^bytes (\d+)-(\d+)\/(?:\d+|\*)$/i.exec(response.headers.get('content-range') || '');
       if (response.status !== 206 || !range || +range[1] !== part.start || +range[2] !== part.end) throw new Error('配信元が指定範囲の動画データを返しませんでした。');
     } else if (response.status !== 200) throw new Error('配信元から完全な区間を取得できませんでした。');
-    const boxes = format === 'init' || format === 'mp4' ? mp4SegmentReader(format) : null;
+    const boxes = format === 'init' || format === 'mp4' ? mp4BoxReader(format) : null;
     const prefix = boxes ? null : new Uint8Array(189);
     let used = 0, total = 0, detected;
     for (;;) {

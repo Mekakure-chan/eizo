@@ -304,7 +304,7 @@ async function fromEngine(msg) {
     return checkUpdateRetries();
   }
   const {page,state} = await entry(msg), job = page.job;
-  const exporting = state?.backgroundSave && state.phase === 'saving' && ['download','download-state','download-cancel'].includes(msg.op);
+  const exporting = state?.backgroundSave && state.phase === 'saving' && ['download','download-existing','download-state','download-cancel'].includes(msg.op);
   if (page.runner !== 'engine' && !['state','write','finished'].includes(msg.op) && !exporting) throw new Error('このキューで使えない操作です。');
   if (msg.op === 'state') return state;
   if (msg.op === 'gap-setting') return readGapPreference(page.incognito);
@@ -333,9 +333,14 @@ async function fromEngine(msg) {
   else if (msg.op === 'frame-end') {
     frameStatus.delete(page.run); readers.delete(page.run);
     await chrome.scripting.unregisterContentScripts({ids:[scriptId(page.run)]}).catch(() => {});
-  } else if (msg.op === 'download') {
+  } else if (msg.op === 'download' || msg.op === 'download-existing') {
     if (!msg.blob?.startsWith('blob:' + extensionOrigin + '/')) throw new Error('保存するファイルを確認できません。');
-    const download = await chrome.downloads.download({url:msg.blob, filename:msg.filename, conflictAction:'uniquify', saveAs:true});
+    let download;
+    if (msg.op === 'download-existing') {
+      const [item] = await chrome.downloads.search({url:msg.blob,limit:1});
+      if (!item) return null;
+      download = item.id;
+    } else download = await chrome.downloads.download({url:msg.blob, filename:msg.filename, conflictAction:'uniquify', saveAs:true});
     await chrome.storage.session.set({['export-download:' + page.run]:download});
     return download;
   } else if (msg.op === 'download-state' || msg.op === 'download-cancel') {

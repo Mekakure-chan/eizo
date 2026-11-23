@@ -9,6 +9,7 @@ import { testUpdateRetry } from './update-retry.mjs';
 import { testRetryRecovery } from './retry-recovery.mjs';
 import { gapPreferenceKey } from '../../extension/queue.mjs';
 import { holdTestExports, testSaveLimit } from './save-limit.mjs';
+import { loseFinishedReply, lostReplyCases, serveDirectBody, testDirectBodies, testFinishedReply, testPickerCancel } from './save-boundaries.mjs';
 import { seedFolderSetting, testFolderPresets, testLostFolderReply } from './folder-presets.mjs';
 import { testCleanupRetry, testQueuedRecovery, testSlowPanel } from './save-recovery.mjs';
 import { testDirectInline, testDirectPermission, testListCapture, testListFiles, testListFilters, testListLive, testListOwner, testProgressUpdates } from './list-actions.mjs';
@@ -68,7 +69,7 @@ chrome.runtime.onMessage.addListener((m,s,reply)=>{if(m?.destination==='hls-engi
   removed.observe(document.body,{childList:true,subtree:true});
   frame.addEventListener('load',done,{once:true});frame.src=frame.src;return true;
  }
- reply({frames:document.querySelectorAll('iframe').length,video:!!window.partialVideoWritten,audio:!!window.partialAudioWritten});});\n(${holdTestExports.toString()})();`);
+ reply({frames:document.querySelectorAll('iframe').length,video:!!window.partialVideoWritten,audio:!!window.partialAudioWritten});});\n(${holdTestExports.toString()})();\n(${loseFinishedReply.toString()})();`);
 const source = {};
 for (const kind of ['video', 'audio']) {
   const file = await readFile(path.join(project, 'tests', 'fixtures', kind + '-fragments.mp4'));
@@ -221,6 +222,7 @@ player = await serve('localhost', (req, res) => {
 });
 function watchPage(req, res) {
   const url = new URL(req.url, 'http://local.test'), mode = url.searchParams.get('case');
+  if (url.pathname.startsWith('/direct-body/')) return serveDirectBody(res,url.pathname,source.video);
   if (url.pathname.startsWith('/site-icons/')) {
     res.writeHead(200, {'Content-Type':'image/svg+xml'}).end('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="8" fill="hotpink"/><path d="M6 4v8l6-4z" fill="white"/></svg>');
     return;
@@ -454,11 +456,22 @@ try {
   });
   const downloadCount = () => worker.evaluate(async () => (await chrome.downloads.search({})).length);
   const cases = process.env.HLS_TEST_CASES?.split(',') || ['playback','moduleupdate','updateretry','retryengine','retrychoice','retrysavehandoff','retryadmission','retrycancelsave','listprogress','listfilters','directinline','directpermission','slowpanel','cleanupretry','queuerecovery','fragmentcheck','segment403','gapauto637','missingtrack','shortsound',...qualityModes,...damagedModes,'listlive','listfiles','listowner','listnative','listcapture','savelimit','wildcard','exact','private','framed','framedlegacy','parallel','latefolder','repeatname','nativefilename','observedfilename','cancelpicker','singlelive','partialicon','framedoff','topplayer','livestopinline','off','denied','frameddenied','ownerclosed','manual','live','publicframed', ...midTransfer,'preset','fileintegrity','nativefirst','folderpresets',
-    'detectroute','queueleave','queueclose','queuereload','readyroute','folderreply'];
+    'detectroute','queueleave','queueclose','queuereload','readyroute','folderreply',...lostReplyCases,'pickerabort','directbody'];
   for (const mode of cases) {
     if (mode === 'playback') { await testSavedPlayback(context,base); continue; }
     if (mode === 'moduleupdate') { await testModuleUpdate({context,base,cdn,project,extension}); continue; }
     await worker.evaluate(seedFolderSetting);
+    if (lostReplyCases.includes(mode)) {
+      if (mode === 'folderunsent') await worker.evaluate(seedFolderSetting,{name:'完了通知テスト'});
+      await testFinishedReply({mode,context,base,top,worker,until,startFromToolbar,lastNative,bytes:Buffer.concat([source.video.init,source.video.media])}); continue;
+    }
+    if (mode === 'pickerabort') {
+      await testPickerCancel({context,base,top,worker,nextQueue,bytes:Buffer.concat([source.video.init,source.video.media])}); continue;
+    }
+    if (mode === 'directbody') {
+      await worker.evaluate(seedFolderSetting,{name:'内容検査'});
+      await testDirectBodies({context,base,top,until,bytes:Buffer.concat([source.video.init,source.video.media])}); continue;
+    }
     if (mode === 'folderreply') { await testLostFolderReply({context,base}); continue; }
     if (mode === 'readyroute') {
       await testReadyQueueNavigation({context,base,top,worker,nextQueue,until,lastNative,bytes:Buffer.concat([source.video.init,source.video.media])}); continue;

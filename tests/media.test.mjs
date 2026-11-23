@@ -30,6 +30,15 @@ test('download filenames are valid on Windows and retain Japanese', () => {
   assert.equal(providerHints(['https://notyoutube.com', 'https://player.vimeo.com/video/1']).length, 1);
 });
 
+test('safe filenames preserve Japanese titles, remove a padded extension and escape numbered Windows devices', () => {
+  assert.equal(safeName('  星空の記録.MP4　','mp4'),'星空の記録.mp4');
+  for (const digit of ['¹','²','³']) {
+    assert.equal(safeName('COM'+digit+'.予告.mp4','mp4'),'_COM'+digit+'.予告.mp4');
+    assert.equal(safeName('lpt'+digit,'mp4'),'_lpt'+digit+'.mp4');
+  }
+  assert.equal(safeName('COM²の記録','mp4'),'COM²の記録.mp4');
+});
+
 test('HLS master selects the highest video variant and the default audio from its group', () => {
   const master = parse('#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="other",DEFAULT=YES,URI="wrong.m3u8"\n' +
     '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",AUTOSELECT=YES,URI="en.m3u8"\n' +

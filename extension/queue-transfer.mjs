@@ -1,4 +1,5 @@
 import { loadJobPlan, writeLivePlan, writePlan } from './hls.mjs';
+import { mp4BoxReader } from './mp4-boxes.mjs';
 import { capturePair } from './renditions.mjs';
 import { queuePlayer } from './queue-player.mjs';
 import { requireOrigins } from './jobs.mjs';
@@ -41,7 +42,9 @@ async function direct(job, writer, signal, report, authorize) {
     if (!response.ok || !response.body) throw new Error('動画ファイルを取得できませんでした（HTTP ' + response.status + '）。');
     await authorize([response.url]);
     const type = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
-    if (type?.startsWith('text/') || type === 'application/json') throw new Error('配信元から動画ファイルが返りませんでした。');
+    if (/^(?:text|image)\/|^application\/(?:[^/]+\+)?(?:json|xml)$/.test(type || '')) {
+      throw new Error('配信元から動画ファイルが返りませんでした。');
+    }
     let expected = Number(response.headers.get('content-length'));
     if (response.status === 206) {
       const range = /^bytes 0-(\d+)\/(\d+)$/i.exec(response.headers.get('content-range') || '');
@@ -52,6 +55,8 @@ async function direct(job, writer, signal, report, authorize) {
       expected = total;
     }
     const length = !response.headers.get('content-encoding') && expected;
+    const extension = Object.hasOwn(mimeExtensions,type) ? mimeExtensions[type] : job.extension || 'bin';
+    const boxes = extension === 'mp4' ? mp4BoxReader('file') : null;
     const reader = response.body.getReader();
     let bytes = 0;
     try {
@@ -59,6 +64,7 @@ async function direct(job, writer, signal, report, authorize) {
         signal.throwIfAborted();
         const { done, value } = await reader.read();
         if (done) break;
+        boxes?.push(value,bytes);
         await writer.write(value);
         bytes += value.byteLength;
         const received = sizeLabel(bytes);
@@ -67,7 +73,8 @@ async function direct(job, writer, signal, report, authorize) {
       }
     } finally { reader.releaseLock(); }
     if (!bytes || (length && length !== bytes)) throw new Error('動画の受信が途中で終了しました。');
-    return { extension: job.extension || mimeExtensions[type] || 'bin', bytes, duration: job.duration || 0 };
+    boxes?.finish();
+    return { extension, bytes, duration: job.duration || 0 };
   } catch (error) { await response.body?.cancel().catch(() => {}); throw error; }
 }
 

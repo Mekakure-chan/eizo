@@ -13,20 +13,27 @@ async function browserSave(file, filename, ext, rpc, signal, onWriting) {
   const blob = URL.createObjectURL(new File([file], filename, {type:exportMime(ext)}));
   try {
     signal.throwIfAborted();
-    const download = await rpc('download', {blob,filename});
+    let download;
+    try { download = await rpc('download', {blob,filename}); }
+    catch (error) {
+      // Chrome may already have accepted this exact Blob. Never start a second download to recover its ID.
+      download = await rpc('download-existing',{blob});
+      if (!Number.isInteger(download)) throw error;
+    }
+    const status = () => rpc('download-state',{download});
     let cancelSent = false;
     for (;;) {
       if (signal.aborted && !cancelSent) {
         cancelSent = true;
         await rpc('download-cancel',{download});
       }
-      const item = await rpc('download-state',{download});
+      const item = await status().catch(status);
       if (item.state === 'complete') return;
       if (item.state !== 'in_progress') {
         if (item.error === 'USER_CANCELED' || signal.aborted) throw new DOMException('保存をキャンセルしました。','AbortError');
         throw new Error('Chromeで保存を完了できませんでした。' + (item.error || ''));
       }
-      if (onWriting && !signal.aborted) { await onWriting(); onWriting = null; }
+      if (onWriting && !signal.aborted) { await onWriting().catch(() => {}); onWriting = null; }
       await delay(350);
     }
   } finally {
@@ -38,7 +45,7 @@ async function save(page, ready, raw, folderOnly, signal, rpc, write) {
   const ext = raw && ready.output.raw ? 'ts' : ready.output.extension;
   const filename = exportName(page,ready.output,ext);
   ready = {...ready,folderPermission:false,backgroundSave:false,saveStage:null,progressDetail:null,destinationName:null};
-  let writer, folder, reserved, releaseSlot, temporary = false, phase = 'ready';
+  let writer, folder, reserved, releaseSlot, saved, temporary = false, phase = 'ready';
   try {
     // Bind the actual handle before publishing saveQueued. Switching or removing a preset cannot redirect this job.
     const settings = await getFolderSettings(page.incognito ? 'private' : 'normal');
@@ -78,22 +85,21 @@ async function save(page, ready, raw, folderOnly, signal, rpc, write) {
       if (temporary) file = await handle.getFile();
     }
     if (!folder) {
-      await write({...saving,saveStage:'choosing',text:'Chromeで保存先を選んでください。',progress:null});
+      if (!await write({...saving,saveStage:'choosing',text:'Chromeで保存先を選んでください。',progress:null},phase)) return;
       await browserSave(file,filename,ext,rpc,signal,() =>
         write({...saving,text:storageSaveText,progress:null},'saving'));
     }
     const savedName = reserved?.name || '動画';
     reserved = null;
-    await write({run:page.run,phase:'saved',text:savedName + ' を保存しました。',progress:null,
+    saved = {run:page.run,phase:'saved',text:savedName + ' を保存しました。',progress:null,
       ...(ready.output.omittedRanges ? {omittedRanges:ready.output.omittedRanges,
         sourceDuration:ready.output.sourceDuration, duration:saving.output.duration} : {}),
-      closeViewer:folder ? page.owner : null, destinationName:saving.destinationName});
-    await dropFiles(page.run).catch(() => {});
+      closeViewer:folder ? page.owner : null, destinationName:saving.destinationName};
   } catch (error) {
     if (writer) await writer.abort().catch(() => {});
     if (reserved) await removeEmptyReservation(folder,reserved).catch(() => {});
     if (await finishMergeFailure(page.run,error,ready.output.omittedRanges,next => write(next,'saving'))) return;
-    if (error.missingSpool) await write({phase:'interrupted',text:error.message,progress:null});
+    if (error.missingSpool) await write({phase:'interrupted',text:error.message,progress:null},phase);
     else {
       const folderPermission = !!folder && ['NotAllowedError','SecurityError'].includes(error.name);
       const canceled = error.name === 'AbortError' || /cancel(?:ed|led)/i.test(error.message);
@@ -101,10 +107,26 @@ async function save(page, ready, raw, folderOnly, signal, rpc, write) {
         : canceled ? '保存をキャンセルしました。取得済みの動画は保存待ちです。' : '保存できませんでした。' + error.message;
       await write({...ready,text,folderPermission}, phase);
     }
+    return;
   } finally {
     if (temporary) await removeExport(page.run).catch(() => {});
     releaseSlot?.();
   }
+  // The destination has committed. Only its queue entry can still need a retry.
+  if (await write(saved,'saving')) await dropFiles(page.run).catch(() => {});
+}
+
+async function publishCompletion(rpc, state, expectedPhase) {
+  let lastError;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try { if (await rpc('write',{state,expectedPhase})) return true; }
+    catch (error) { lastError = error; }
+    // A delayed first write can win the race against the conditional retry.
+    const current = await rpc('state');
+    if (current.phase === state.phase || (state.phase === 'ready' && ['saveQueued','saving','saved'].includes(current.phase))) return true;
+    if (current.phase !== expectedPhase || !lastError) return false;
+  }
+  throw lastError;
 }
 
 async function perform({page,action,raw,folderCheck}, controller, stop) {
@@ -112,7 +134,8 @@ async function perform({page,action,raw,folderCheck}, controller, stop) {
   const rpc = (op, data) => host(op,{...key,...data});
   let previousWrite = Promise.resolve();
   function write(state, expectedPhase) {
-    const pending = previousWrite.then(() => rpc('write',{state,expectedPhase}));
+    const completion = state.phase === 'saved' || (state.phase === 'ready' && ['fetching','recording'].includes(expectedPhase));
+    const pending = previousWrite.then(() => completion ? publishCompletion(rpc,state,expectedPhase) : rpc('write',{state,expectedPhase}));
     previousWrite = pending.catch(() => {});
     return pending;
   }
@@ -135,7 +158,8 @@ async function perform({page,action,raw,folderCheck}, controller, stop) {
   } else if (action === 'cancel' && ['permission','reader','method'].includes(state.phase)) {
     await write({phase:'canceled',text:'取得を中止しました。',progress:null},state.phase);
   }
-  await rpc('finished');
+  // This only releases worker bookkeeping. It cannot change the outcome of an acquisition or save.
+  await rpc('finished').catch(() => rpc('finished').catch(() => {}));
 }
 
 function start(request) {
@@ -156,7 +180,10 @@ function start(request) {
     const fail = expectedPhase => host('write',{id:page.id,run:page.run,expectedPhase,state:{phase:'failed',progress:null,text:error.message}});
     if (action === 'retry-update') {
       if (!await fail('updateRetry')) await fail('fetching');
-    } else await fail();
+    } else if (['start','retry','skip-gaps'].includes(action)) {
+      const state = await host('state',{id:page.id,run:page.run});
+      if (['queued','fetching','recording'].includes(state.phase)) await fail(state.phase);
+    }
   }).catch(() => {}).finally(() => {
     tasks.delete(page.run);
     if (!tasks.size) idleTimer = setTimeout(() => { void host('idle').catch(() => {}); }, 1200);

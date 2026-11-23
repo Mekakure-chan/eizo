@@ -229,6 +229,19 @@ test('a direct MP4 can have a deliberately short soundtrack', async () => {
   await checkMp4FileDuration(new Blob([bytes]),10,new AbortController().signal);
 });
 
+test('a direct MP4 of unknown length needs a real audio or video sample', async () => {
+  const signal = new AbortController().signal;
+  const video = await mp4Fixture('video-fragments.mp4');
+  for (const data of [video,await mp4Fixture('audio-fragments.mp4')]) {
+    await checkMp4FileDuration(new Blob([data]),0,signal);
+  }
+  const firstPayload = video.indexOf('mdat')+4;
+  for (const data of [video.subarray(0,video.indexOf('moof')-4),video.subarray(0,firstPayload+3),
+    '<!doctype html><title>Unavailable</title>']) {
+    await assert.rejects(checkMp4FileDuration(new Blob([data]),0,signal),/MP4/);
+  }
+});
+
 test('HLS duration checks skip large MP4 payloads while reading sample timings', async () => {
   const bytes = await mp4Fixture('video-fragments.mp4');
   const mdat = bytes.indexOf('mdat') - 4, end = mdat + bytes.readUInt32BE(mdat);
