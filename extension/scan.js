@@ -5,6 +5,8 @@
   let playback;
   const flags = { blob: false, protected: false };
   const visited = new Set();
+  // Let an expired panel restore the publisher's title before reading it for a new job.
+  if (window === top && !globalThis.embeddedVideoSourcePanel) document.dispatchEvent(new Event('embedded-video-check-source-panel'));
   const title = globalThis.embeddedVideoSourcePanel?.title ?? document.title;
   const targets = globalThis.embeddedVideoSaverTargets ??= { ids: new WeakMap(), elements: new Map(), next: 0 };
   targets.elements.clear();

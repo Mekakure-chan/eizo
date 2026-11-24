@@ -2,6 +2,9 @@
 (() => {
   if (window !== top || !/^(text\/html|application\/xhtml\+xml)$/i.test(document.contentType)) return null;
   if (globalThis.embeddedVideoSourcePanel) return location.href;
+  // A previous extension instance can still own DOM listeners in this document.
+  const checkPanel = 'embedded-video-check-source-panel';
+  document.dispatchEvent(new Event(checkPanel));
   let active;
   globalThis.embeddedVideoSourcePanel = { get title() { return active?.title ?? document.title; } };
   function mount(view) {
@@ -48,11 +51,14 @@
     function button(text, action) {
       const el = make('button');
       el.type = 'button'; el.textContent = text;
-      el.onclick = event => {
-        if (!event.isTrusted || closed || location.href !== originalUrl) return;
-        chrome.runtime.sendMessage({op:'source-action', id, run, action}).then(reply => {
-          if (reply?.error) hint.textContent = reply.error;
-        }).catch(() => { hint.textContent = '拡張を再読み込みした場合は、動画ページで拡張アイコンを押してください。'; });
+      el.onclick = async event => {
+        if (!event.isTrusted || closed || location.href !== originalUrl || releaseIfDisconnected()) return;
+        try {
+          const reply = await chrome.runtime.sendMessage({op:'source-action', id, run, action});
+          if (!closed && reply?.error) hint.textContent = reply.error;
+        } catch {
+          if (!closed && !releaseIfDisconnected()) hint.textContent = '映蔵と通信できませんでした。もう一度お試しください。';
+        }
       };
       actions.append(el);
       return el;
@@ -101,14 +107,25 @@
       host.remove();
       tabIndicator.close();
       restoreTitle();
+      document.removeEventListener(checkPanel, releaseIfDisconnected);
+      removeEventListener('focus', releaseIfDisconnected);
       removeEventListener('pagehide', end);
       removeEventListener('hashchange', checkUrl);
       removeEventListener('popstate', checkUrl);
       window.navigation?.removeEventListener('currententrychange', checkUrl);
       if (active?.run === run) active = null;
     }
+    function releaseIfDisconnected() {
+      try {
+        if (globalThis.chrome?.runtime?.getURL('')) return false;
+      } catch { /* Chrome can invalidate the API while the old document remains open. */ }
+      cleanup();
+      return true;
+    }
     function end() { cleanup(); }
     function checkUrl() { if (location.href !== originalUrl) end(); }
+    document.addEventListener(checkPanel, releaseIfDisconnected);
+    addEventListener('focus', releaseIfDisconnected);
     addEventListener('pagehide', end, { once: true });
     addEventListener('hashchange', checkUrl);
     addEventListener('popstate', checkUrl);

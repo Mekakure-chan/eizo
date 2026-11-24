@@ -4,6 +4,7 @@ import { serveArchive637, testAutoGap637 } from './automatic-gaps.mjs';
 import { testMergeFailure, testMissingAudio } from './merge-failure.mjs';
 import { testModuleUpdate } from './module-update.mjs';
 import { testDetectionNavigation, testQueueDeparture, testReadyQueueNavigation } from './navigation.mjs';
+import { testSourcePanelReload, testSourcePanelConnection } from './source-panel.mjs';
 import { testSavedPlayback } from './mp4-playback.mjs';
 import { testUpdateRetry } from './update-retry.mjs';
 import { testRetryRecovery } from './retry-recovery.mjs';
@@ -456,11 +457,19 @@ try {
   });
   const downloadCount = () => worker.evaluate(async () => (await chrome.downloads.search({})).length);
   const cases = process.env.HLS_TEST_CASES?.split(',') || ['playback','moduleupdate','updateretry','retryengine','retrychoice','retrysavehandoff','retryadmission','retrycancelsave','listprogress','listfilters','directinline','directpermission','slowpanel','cleanupretry','queuerecovery','fragmentcheck','segment403','gapauto637','missingtrack','shortsound',...qualityModes,...damagedModes,'listlive','listfiles','listowner','listnative','listcapture','savelimit','wildcard','exact','private','framed','framedlegacy','parallel','latefolder','repeatname','nativefilename','observedfilename','cancelpicker','singlelive','partialicon','framedoff','topplayer','livestopinline','off','denied','frameddenied','ownerclosed','manual','live','publicframed', ...midTransfer,'preset','fileintegrity','nativefirst','folderpresets',
-    'detectroute','queueleave','queueclose','queuereload','readyroute','folderreply',...lostReplyCases,'pickerabort','directbody'];
+    'detectroute','queueleave','queueclose','queuereload','readyroute','folderreply',...lostReplyCases,'pickerabort','directbody','panelconnection','panelreload'];
   for (const mode of cases) {
     if (mode === 'playback') { await testSavedPlayback(context,base); continue; }
     if (mode === 'moduleupdate') { await testModuleUpdate({context,base,cdn,project,extension}); continue; }
     await worker.evaluate(seedFolderSetting);
+    if (mode === 'panelconnection') {
+      await testSourcePanelConnection({context,top,worker,startFromToolbar,panelView,until}); continue;
+    }
+    if (mode === 'panelreload') {
+      await testSourcePanelReload({context,base,top,worker,startFromToolbar,panelView,until,bytes:Buffer.concat([source.video.init,source.video.media])});
+      worker = await getWorker('/background.mjs');
+      continue;
+    }
     if (lostReplyCases.includes(mode)) {
       if (mode === 'folderunsent') await worker.evaluate(seedFolderSetting,{name:'完了通知テスト'});
       await testFinishedReply({mode,context,base,top,worker,until,startFromToolbar,lastNative,bytes:Buffer.concat([source.video.init,source.video.media])}); continue;
